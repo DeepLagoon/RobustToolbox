@@ -57,14 +57,24 @@ namespace Robust.Client.WebView
 
             if (!_controlImpl.IsOpen)
                 _controlImpl.StartBrowser();
+            _controlImpl.VisibilityChanged(VisibleInTree);
         }
 
         protected override void ExitedTree()
         {
             base.ExitedTree();
 
-            if (!_alwaysActive)
+            // The WebView manager can shut down before UI controls leave the tree.
+            if (!_alwaysActive && _controlImpl.IsOpen)
                 _controlImpl.CloseBrowser();
+            else if (_controlImpl.IsOpen)
+                _controlImpl.VisibilityChanged(false);
+        }
+
+        protected override void VisibilityChanged(bool newVisible)
+        {
+            base.VisibilityChanged(newVisible);
+            _controlImpl?.VisibilityChanged(VisibleInTree);
         }
 
         protected internal override void MouseMove(GUIMouseMoveEventArgs args)
@@ -118,6 +128,14 @@ namespace Robust.Client.WebView
         {
             base.Resized();
 
+            _controlImpl.Resized();
+        }
+
+        protected internal override void UIScaleChanged()
+        {
+            base.UIScaleChanged();
+            // Physical size can change while logical size stays the same.
+            // Notify the existing browser instead of recreating its document.
             _controlImpl.Resized();
         }
 

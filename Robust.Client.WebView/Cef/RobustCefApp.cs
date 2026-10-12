@@ -55,7 +55,7 @@ namespace Robust.Client.WebView.Cef
         protected override void OnRegisterCustomSchemes(CefSchemeRegistrar registrar)
         {
             // NOTE: KEEP IN SYNC WITH RUST CODE!
-            registrar.AddCustomScheme("res", CefSchemeOptions.Secure | CefSchemeOptions.Standard);
+            registrar.AddCustomScheme("res", CefSchemeOptions.Secure | CefSchemeOptions.Standard | CefSchemeOptions.FetchEnabled);
             registrar.AddCustomScheme("usr", CefSchemeOptions.Secure | CefSchemeOptions.Standard);
         }
 

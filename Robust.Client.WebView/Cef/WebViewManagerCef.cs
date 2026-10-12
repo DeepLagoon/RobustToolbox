@@ -180,6 +180,18 @@ namespace Robust.Client.WebView.Cef
                 window.Dispose();
             }
 
+            // CloseBrowser is asynchronous. CEF shutdown requires OnBeforeClose first.
+            var closeWait = System.Diagnostics.Stopwatch.StartNew();
+            while (System.Threading.Volatile.Read(ref _embeddedBrowsers) > 0 || _browserWindows.Count > 0)
+            {
+                CefRuntime.DoMessageLoopWork();
+                if (closeWait.Elapsed.TotalSeconds >= 5)
+                {
+                    _sawmill.Error("CEF close timed out; skipping unsafe runtime shutdown.");
+                    return;
+                }
+                System.Threading.Thread.Sleep(1);
+            }
             CefRuntime.Shutdown();
         }
 

@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using Robust.Client.Utility;
 using Robust.Shared.Maths;
 using SixLabors.ImageSharp;
@@ -14,7 +14,11 @@ namespace Robust.Client.WebView.Cef
         public unsafe void UpdateBuffer(int width, int height, IntPtr buffer, CefRectangle dirtyRect)
         {
             if (width != Buffer.Width || height != Buffer.Height)
+            {
                 UpdateSize(width, height);
+                // A resized buffer has no previous pixels to preserve.
+                dirtyRect = new CefRectangle(0, 0, width, height);
+            }
 
             // NOTE: Image data from CEF is actually BGRA32, not RGBA32.
             // OpenGL ES does not allow uploading BGRA data, so we pretend it's RGBA32 and use a shader to swizzle it.
@@ -30,7 +34,9 @@ namespace Robust.Client.WebView.Cef
 
         private void UpdateSize(int width, int height)
         {
+            var previous = Buffer;
             Buffer = new Image<Rgba32>(width, height);
+            previous.Dispose();
         }
     }
 }

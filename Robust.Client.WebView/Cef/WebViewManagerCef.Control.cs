@@ -5,6 +5,7 @@ using Robust.Client.Graphics;
 using Robust.Client.Input;
 using Robust.Client.UserInterface;
 using Robust.Shared.IoC;
+using Robust.Shared.Asynchronous;
 using Robust.Shared.Log;
 using Robust.Shared.Maths;
 using Robust.Shared.Utility;
@@ -18,6 +19,7 @@ namespace Robust.Client.WebView.Cef
     internal partial class WebViewManagerCef
     {
         private readonly List<ControlImpl> _activeControls = new();
+        private int _embeddedBrowsers;
 
         public IWebViewControlImpl MakeControlImpl(WebViewControl owner)
         {
@@ -28,7 +30,7 @@ namespace Robust.Client.WebView.Cef
             return impl;
         }
 
-        private sealed class ControlImpl : IWebViewControlImpl
+        private sealed partial class ControlImpl : IWebViewControlImpl
         {
             private static readonly Dictionary<Key, CefKeyCodes.ChromiumKeyboardCode> KeyMap = new()
             {
@@ -134,6 +136,7 @@ namespace Robust.Client.WebView.Cef
 
             [Dependency] private IClyde _clyde = default!;
             [Dependency] private IInputManager _inputMgr = default!;
+            [Dependency] private ITaskManager _tasks = default!;
 
             private readonly WebViewManagerCef _manager;
             public readonly WebViewControl Owner;
@@ -147,11 +150,21 @@ namespace Robust.Client.WebView.Cef
             }
 
             private const int ScrollSpeed = 50;
+            private Vector2 _wheelRemainder;
+
+            private Vector2i ConsumeWheel(Vector2 delta)
+            {
+                _wheelRemainder += delta * ScrollSpeed;
+                var pixels = new Vector2i((int)_wheelRemainder.X, (int)_wheelRemainder.Y);
+                _wheelRemainder -= new Vector2(pixels.X, pixels.Y);
+                return pixels;
+            }
 
             private bool _textInputActive;
 
             private readonly RobustRequestHandler _requestHandler = new(Logger.GetSawmill("root"));
             private LiveData? _data;
+            private readonly List<UIBox2i> _uploadRegions = new(16);
             private string _startUrl = "about:blank";
 
             public string Url
@@ -178,7 +191,11 @@ namespace Robust.Client.WebView.Cef
 
                 // A funny web cef client. This can actually be shared by multiple browsers, but I'm not sure how the
                 // rendering would work in that case? TODO CEF: Investigate a way to share the web client?
-                var client = new RobustCefClient(renderer, _requestHandler, new RobustLoadHandler());
+                var client = new RobustCefClient(renderer, _requestHandler, new RobustLoadHandler(), () =>
+                {
+                    renderer.BrowserClosed();
+                    System.Threading.Interlocked.Decrement(ref _manager._embeddedBrowsers);
+                });
 
                 var info = CefWindowInfo.Create();
 
@@ -199,17 +216,22 @@ namespace Robust.Client.WebView.Cef
 
                 _data = new LiveData(texture, client, browser, renderer);
                 _manager._activeControls.Add(this);
+                System.Threading.Interlocked.Increment(ref _manager._embeddedBrowsers);
+                // Re-entering the tree need not trigger a new layout pass.
+                Resized();
+                VisibilityChanged(Owner.VisibleInTree);
             }
 
             public void CloseBrowser()
             {
-                DebugTools.AssertNotNull(_data);
-
-                _data!.Texture.Dispose();
-                _data.Browser.GetHost().CloseBrowser(true);
+                // Manager shutdown and UI teardown can both close the same browser.
+                // Detach the live data first so a repeated close cannot dispose it twice.
+                if (_data is not { } data) return;
                 _data = null;
-
                 _manager._activeControls.Remove(this);
+                data.Renderer.BeginClose();
+                data.Texture.Dispose();
+                data.Browser.GetHost().CloseBrowser(true);
             }
 
             public void MouseMove(GUIMouseMoveEventArgs args)
@@ -246,10 +268,9 @@ namespace Robust.Client.WebView.Cef
                     (int)args.RelativePosition.X, (int)args.RelativePosition.Y,
                     modifiers);
 
-                _data.Browser.GetHost().SendMouseWheelEvent(
-                    mouseEvent,
-                    (int)args.Delta.X * ScrollSpeed,
-                    (int)args.Delta.Y * ScrollSpeed);
+                var wheel = ConsumeWheel(args.Delta);
+                if (wheel != Vector2i.Zero)
+                    _data.Browser.GetHost().SendMouseWheelEvent(mouseEvent, wheel.X, wheel.Y);
             }
 
             public bool RawKeyEvent(in GuiRawKeyEvent guiRawEvent)
@@ -317,7 +338,7 @@ namespace Robust.Client.WebView.Cef
                         host.SendKeyEvent(new CefKeyEvent
                         {
                             EventType = CefKeyEventType.Char,
-                            WindowsKeyCode = '\b',
+                            WindowsKeyCode = '\r',
                             NativeKeyCode = lParam,
                             Modifiers = modifiers
                         });
@@ -398,11 +419,28 @@ namespace Robust.Client.WebView.Cef
                 if (_data == null)
                     return;
 
-                _data.Browser.GetHost().NotifyMoveOrResizeStarted();
-                _data.Browser.GetHost().WasResized();
-                _data.Texture.Dispose();
-                _data.Texture = _clyde.CreateBlankTexture<Rgba32>((Owner.PixelWidth, Owner.PixelHeight));
-                _data.Browser.GetHost().Invalidate(CefPaintElementType.View);
+                var host = _data.Browser.GetHost();
+                _data.Renderer.UpdateViewMetrics(Owner.Size, Owner.UIScale);
+                // Refresh CEF deviceScaleFactor without reloading the page.
+                host.NotifyScreenInfoChanged();
+                host.NotifyMoveOrResizeStarted();
+                var size = new Vector2i(Math.Max(1, Owner.PixelWidth), Math.Max(1, Owner.PixelHeight));
+                if (_data.Texture.Size != size)
+                {
+                    _data.Texture.Dispose();
+                    _data.Texture = _clyde.CreateBlankTexture<Rgba32>(size);
+                    lock (_data.Renderer.Buffer)
+                        _data.Renderer.FullUpload = true;
+                }
+                host.WasResized();
+                host.Invalidate(CefPaintElementType.View);
+            }
+
+            public void VisibilityChanged(bool visible)
+            {
+                if (_data is not { } data)
+                    return;
+                data.Browser.GetHost().WasHidden(!visible);
             }
 
             public void Draw(DrawingHandleScreen handle)
@@ -410,20 +448,68 @@ namespace Robust.Client.WebView.Cef
                 if (_data == null)
                     return;
 
-                // update texture only when CEF has rendered new content
-                if (_data.Renderer.IsDirty)
+                var renderer = _data.Renderer;
+                Rgba32[]? upload = null;
+                var count = 0;
+                _uploadRegions.Clear();
+                try
                 {
-                    _data.Renderer.IsDirty = false;
+                    lock (renderer.Buffer)
+                    {
+                        if (renderer.IsDirty)
+                        {
+                            var image = renderer.Buffer.Buffer;
+                            var width = Math.Min(image.Width, _data.Texture.Width);
+                            var height = Math.Min(image.Height, _data.Texture.Height);
+                            if (renderer.FullUpload || renderer.DirtyRegions.FullUpload)
+                                _uploadRegions.Add(new UIBox2i(0, 0, width, height));
+                            else
+                            {
+                                foreach (var dirty in renderer.DirtyRegions.Rectangles)
+                                {
+                                    var clipped = new UIBox2i(dirty.Left, dirty.Top,
+                                        Math.Min(width, dirty.Right), Math.Min(height, dirty.Bottom));
+                                    if (clipped.Right > clipped.Left && clipped.Bottom > clipped.Top)
+                                        _uploadRegions.Add(clipped);
+                                }
+                            }
+                            foreach (var region in _uploadRegions)
+                                count += region.Width * region.Height;
+                            if (count > 0)
+                            {
+                                upload = System.Buffers.ArrayPool<Rgba32>.Shared.Rent(count);
+                                var pixels = ImageOps.GetPixelSpan(image);
+                                var offset = 0;
+                                foreach (var region in _uploadRegions)
+                                {
+                                    for (var row = 0; row < region.Height; row++)
+                                        pixels.Slice((region.Top + row) * image.Width + region.Left, region.Width)
+                                            .CopyTo(upload.AsSpan(offset + row * region.Width, region.Width));
+                                    offset += region.Width * region.Height;
+                                }
+                            }
+                            renderer.IsDirty = false;
+                            renderer.FullUpload = false;
+                            renderer.DirtyRegions.Clear();
+                        }
+                    }
 
-                    var bufImg = _data.Renderer.Buffer.Buffer;
-
-                    _data.Texture.SetSubImage(
-                        Vector2i.Zero,
-                        bufImg,
-                        new UIBox2i(
-                            0, 0,
-                            Math.Min(Owner.PixelWidth, bufImg.Width),
-                            Math.Min(Owner.PixelHeight, bufImg.Height)));
+                    // GPU uploads can block; allow CEF to paint its next frame meanwhile.
+                    // The cleared dirty flags belong to the snapshot, not subsequent paints.
+                    if (upload != null)
+                    {
+                        var offset = 0;
+                        foreach (var region in _uploadRegions)
+                        {
+                            var length = region.Width * region.Height;
+                            _data.Texture.SetSubImage<Rgba32>(region.TopLeft, region.Size, upload.AsSpan(offset, length));
+                            offset += length;
+                        }
+                    }
+                }
+                finally
+                {
+                    if (upload != null) System.Buffers.ArrayPool<Rgba32>.Shared.Return(upload);
                 }
 
                 handle.UseShader(_shaderInstance);
@@ -525,6 +611,20 @@ namespace Robust.Client.WebView.Cef
                     Owner.Root?.Window?.TextInputStop();
             }
 
+            internal void ScheduleTextInput(ControlRenderHandler renderer, bool active)
+            {
+                _tasks.RunOnMainThread(() =>
+                {
+                    // A callback from a closed browser must not affect its replacement.
+                    if (_data?.Renderer != renderer)
+                        return;
+                    if (active)
+                        TextInputStart();
+                    else
+                        TextInputStop();
+                });
+            }
+
             private sealed class LiveData
             {
                 public OwnedTexture Texture;
@@ -549,63 +649,88 @@ namespace Robust.Client.WebView.Cef
         private sealed class ControlRenderHandler : CefRenderHandler
         {
             public ImageBuffer Buffer { get; }
-            private ControlImpl _control;
+            private readonly ControlImpl _control;
             internal volatile bool IsDirty;
+            internal readonly DirtyRegions DirtyRegions = new();
+            internal bool FullUpload = true;
+            private volatile bool _closing;
+            private ViewMetrics? _metrics;
+
+            private sealed record ViewMetrics(CefRectangle Rectangle, float Scale);
+
+            internal void UpdateViewMetrics(Vector2 size, float scale)
+            {
+                // Publish one immutable snapshot. CEF callbacks never traverse the UI tree.
+                System.Threading.Volatile.Write(ref _metrics,
+                    new ViewMetrics(new CefRectangle(0, 0, (int)Math.Max(size.X, 1), (int)Math.Max(size.Y, 1)), scale));
+            }
+
+            internal void BeginClose()
+            {
+                lock (Buffer)
+                    _closing = true;
+            }
+
+            internal void BrowserClosed()
+            {
+                lock (Buffer)
+                {
+                    _closing = true;
+                    Buffer.Buffer.Dispose();
+                    DirtyRegions.Clear();
+                }
+            }
+
+            internal void MarkDirty(int width, int height, CefRectangle rect)
+            {
+                DirtyRegions.Add(width, height, rect);
+                IsDirty = true;
+            }
 
             internal ControlRenderHandler(ControlImpl control)
             {
                 Buffer = new ImageBuffer();
                 _control = control;
+                UpdateViewMetrics(control.Owner.Size, control.Owner.UIScale);
             }
 
             protected override CefAccessibilityHandler? GetAccessibilityHandler() => null;
 
             protected override void GetViewRect(CefBrowser browser, out CefRectangle rect)
             {
-                if (_control.Owner.Disposed)
-                {
-                    rect = new CefRectangle();
-                    return;
-                }
-
-                // TODO CEF: Do we need to pass real screen coords? Cause what we do already works...
-                //var screenCoords = _control.ScreenCoordinates;
-                //rect = new CefRectangle((int) screenCoords.X, (int) screenCoords.Y, (int)Math.Max(_control.Size.X, 1), (int)Math.Max(_control.Size.Y, 1));
-
-                // We do the max between size and 1 because it will LITERALLY CRASH WITHOUT AN ERROR otherwise.
-                rect = new CefRectangle(
-                    0, 0,
-                    (int)Math.Max(_control.Owner.Size.X, 1), (int)Math.Max(_control.Owner.Size.Y, 1));
+                // CEF requires a non-empty view rect even during asynchronous close.
+                rect = !_closing && System.Threading.Volatile.Read(ref _metrics) is { } metrics
+                    ? metrics.Rectangle
+                    : new CefRectangle(0, 0, 1, 1);
             }
 
             protected override bool GetScreenInfo(CefBrowser browser, CefScreenInfo screenInfo)
             {
-                if (_control.Owner.Disposed)
-                    return false;
-
-                screenInfo.DeviceScaleFactor = _control.Owner.UIScale;
+                screenInfo.DeviceScaleFactor = System.Threading.Volatile.Read(ref _metrics)?.Scale ?? 1;
 
                 return true;
             }
 
             protected override void OnPopupSize(CefBrowser browser, CefRectangle rect)
             {
-                if (_control.Owner.Disposed)
-                    return;
             }
 
             protected override void OnPaint(CefBrowser browser, CefPaintElementType type, CefRectangle[] dirtyRects,
                 IntPtr buffer, int width, int height)
             {
-                if (_control.Owner.Disposed)
-                    return;
-
-                foreach (var dirtyRect in dirtyRects)
+                if (type != CefPaintElementType.View || width <= 0 || height <= 0 || buffer == IntPtr.Zero) return;
+                lock (Buffer)
                 {
-                    Buffer.UpdateBuffer(width, height, buffer, dirtyRect);
+                    if (_closing)
+                        return;
+                    if (Buffer.Buffer.Width != width || Buffer.Buffer.Height != height)
+                        FullUpload = true;
+                    foreach (var dirtyRect in dirtyRects)
+                    {
+                        Buffer.UpdateBuffer(width, height, buffer, dirtyRect);
+                        MarkDirty(width, height, dirtyRect);
+                    }
                 }
-
-                IsDirty = true;
             }
 
             protected override void OnAcceleratedPaint(
@@ -619,15 +744,11 @@ namespace Robust.Client.WebView.Cef
 
             protected override void OnScrollOffsetChanged(CefBrowser browser, double x, double y)
             {
-                if (_control.Owner.Disposed)
-                    return;
             }
 
             protected override void OnImeCompositionRangeChanged(CefBrowser browser, CefRange selectedRange,
                 CefRectangle[] characterBounds)
             {
-                if (_control.Owner.Disposed)
-                    return;
             }
 
             protected override void OnVirtualKeyboardRequested(CefBrowser browser, CefTextInputMode inputMode)
@@ -636,14 +757,8 @@ namespace Robust.Client.WebView.Cef
 
                 // Treat virtual keyboard requests as a guide for whether we should accept text input.
 
-                if (inputMode == CefTextInputMode.None)
-                {
-                    _control.TextInputStop();
-                }
-                else
-                {
-                    _control.TextInputStart();
-                }
+                if (!_closing)
+                    _control.ScheduleTextInput(this, inputMode != CefTextInputMode.None);
             }
         }
     }

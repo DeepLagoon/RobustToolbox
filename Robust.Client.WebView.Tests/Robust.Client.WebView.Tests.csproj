@@ -1,0 +1,21 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <Import Project="../MSBuild/Robust.Engine.props" />
+  <PropertyGroup>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <IsTestProject>true</IsTestProject>
+    <ValidateExecutableReferencesMatchSelfContained>false</ValidateExecutableReferencesMatchSelfContained>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="Microsoft.NET.Test.Sdk" />
+    <PackageReference Include="NUnit" />
+    <PackageReference Include="NUnit3TestAdapter" />
+    <PackageReference Include="NUnit.Analyzers" />
+    <PackageReference Include="SixLabors.ImageSharp" />
+    <ProjectReference Include="../Robust.Client.WebView/Robust.Client.WebView.csproj" />
+    <ProjectReference Include="../Robust.Client/Robust.Client.csproj" />
+    <ProjectReference Include="../Robust.Shared/Robust.Shared.csproj" />
+    <ProjectReference Include="../Robust.Shared.Maths/Robust.Shared.Maths.csproj" />
+    <ProjectReference Include="../cefglue/CefGlue/CefGlue.csproj" />
+  </ItemGroup>
+  <Import Project="../MSBuild/Robust.Properties.targets" />
+</Project>

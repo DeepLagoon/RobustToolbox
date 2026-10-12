@@ -19,6 +19,7 @@ namespace Robust.Client.WebView
         bool RawKeyEvent(in GuiRawKeyEvent guiRawEvent);
         void TextEntered(GUITextEnteredEventArgs args);
         void Resized();
+        void VisibilityChanged(bool visible);
         void Draw(DrawingHandleScreen handle);
         void AddBeforeBrowseHandler(Action<IBeforeBrowseContext> handler);
         void RemoveBeforeBrowseHandler(Action<IBeforeBrowseContext> handler);

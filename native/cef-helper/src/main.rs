@@ -25,6 +25,7 @@ fn main() {
 // CefSchemeOptions
 const SCHEME_STANDARD: i32 = 1 << 0;
 const SCHEME_SECURE: i32 = 1 << 3;
+const SCHEME_FETCH_ENABLED: i32 = 1 << 6;
 
 wrap_app! {
     struct DemoApp {
@@ -35,7 +36,7 @@ wrap_app! {
             let registrar = registrar.unwrap();
             // NOTE: KEEP IN SYNC WITH C# CODE!
             registrar.add_custom_scheme(Some(&"usr".into()), SCHEME_SECURE | SCHEME_STANDARD);
-            registrar.add_custom_scheme(Some(&"res".into()), SCHEME_SECURE | SCHEME_STANDARD);
+            registrar.add_custom_scheme(Some(&"res".into()), SCHEME_SECURE | SCHEME_STANDARD | SCHEME_FETCH_ENABLED);
         }
     }
 }

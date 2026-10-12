@@ -123,6 +123,11 @@
     </Properties>
   </Project>
   <Project Path="Robust.Client.IntegrationTests/Robust.Client.IntegrationTests.csproj" />
+  <Project Path="Robust.Client.WebView.Tests/Robust.Client.WebView.Tests.csproj">
+    <Properties Name="RobustToolbox">
+      <Property Name="Feature" Value="WebView" />
+    </Properties>
+  </Project>
   <Project Path="Robust.Client.Tests/Robust.Client.Tests.csproj" />
   <Project Path="Robust.Client/Robust.Client.csproj" />
   <Project Path="Robust.Packaging.Tests/Robust.Packaging.Tests.csproj" />

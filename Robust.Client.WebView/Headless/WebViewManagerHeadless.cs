@@ -116,6 +116,10 @@ namespace Robust.Client.WebView.Headless
             {
             }
 
+            public void VisibilityChanged(bool visible)
+            {
+            }
+
             public void Draw(DrawingHandleScreen handle)
             {
             }
