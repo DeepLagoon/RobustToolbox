@@ -353,6 +353,7 @@ namespace Robust.Shared.Prototypes
             var byType = new Dictionary<Type, PrototypesReloadedEventArgs.PrototypeChangeSet>();
             var modifiedKinds = new HashSet<KindData>();
             var toProcess = new HashSet<string>();
+            var failed = new HashSet<string>();
             var processQueue = new Queue<string>();
 
             foreach (var kind in prototypeTypeOrder)
@@ -362,6 +363,7 @@ namespace Robust.Shared.Prototypes
 
                 var tree = kindData.Inheritance;
                 toProcess.Clear();
+                failed.Clear();
                 processQueue.Clear();
 
                 DebugTools.AssertEqual(kind.IsAssignableTo(typeof(IInheritingPrototype)), tree != null);
@@ -381,6 +383,17 @@ namespace Robust.Shared.Prototypes
                     if (tree == null)
                         return;
 
+                    // Files can arrive in different hot-reload batches. A new parent's raw
+                    // mapping may already exist even though it has never been composed.
+                    if (tree.TryGetParents(id, out var parents))
+                    {
+                        foreach (var parent in parents)
+                        {
+                            if (!kindData.Results.ContainsKey(parent) && kindData.RawResults.ContainsKey(parent))
+                                AddToQueue(parent);
+                        }
+                    }
+
                     if (!tree.TryGetChildren(id, out var children))
                         return;
 
@@ -390,17 +403,36 @@ namespace Robust.Shared.Prototypes
                     }
                 }
 
+                void SkipPrototype(string id, string reason)
+                {
+                    toProcess.Remove(id);
+                    failed.Add(id);
+                    Sawmill.Error($"Cannot reload {kindData.Name} prototype '{id}': {reason}. Existing prototype data was left unchanged.");
+                }
+
                 while (processQueue.TryDequeue(out var id))
                 {
                     DebugTools.Assert(toProcess.Contains(id));
+                    if (!kindData.RawResults.TryGetValue(id, out var raw))
+                    {
+                        SkipPrototype(id, "its raw definition is missing");
+                        continue;
+                    }
                     if (tree != null)
                     {
                         if (tree.TryGetParents(id, out var parents))
                         {
                             DebugTools.Assert(parents.Length > 0);
                             var nonPushedParent = false;
+                            string? unavailableParent = null;
                             foreach (var parent in parents)
                             {
+                                if (failed.Contains(parent)
+                                    || !toProcess.Contains(parent) && !kindData.Results.ContainsKey(parent))
+                                {
+                                    unavailableParent = parent;
+                                    break;
+                                }
                                 if (!toProcess.Contains(parent))
                                     continue;
 
@@ -412,6 +444,12 @@ namespace Robust.Shared.Prototypes
                                 break;
                             }
 
+                            if (unavailableParent != null)
+                            {
+                                SkipPrototype(id, $"parent '{unavailableParent}' has no usable composed definition");
+                                continue;
+                            }
+
                             if (nonPushedParent)
                                 continue;
 
@@ -420,7 +458,7 @@ namespace Robust.Shared.Prototypes
                                 kindData.Results[id] = _serializationManager.PushCompositionWithGenericNode(
                                     kind,
                                     kindData.Results[parents[0]],
-                                    kindData.RawResults[id]);
+                                    raw);
                             }
                             else
                             {
@@ -433,12 +471,12 @@ namespace Robust.Shared.Prototypes
                                 kindData.Results[id] = _serializationManager.PushCompositionWithGenericNode(
                                     kind,
                                     parentMaps,
-                                    kindData.RawResults[id]);
+                                    raw);
                             }
                         }
                         else
                         {
-                            kindData.Results[id] = kindData.RawResults[id];
+                            kindData.Results[id] = raw;
                         }
                     }
 
