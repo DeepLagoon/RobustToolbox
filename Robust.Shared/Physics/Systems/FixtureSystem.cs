@@ -35,12 +35,19 @@ namespace Robust.Shared.Physics.Systems
         {
             base.Initialize();
 
+            SubscribeLocalEvent<FixturesComponent, ComponentInit>(OnFixtureInit);
             SubscribeLocalEvent<FixturesComponent, ComponentShutdown>(OnShutdown);
             SubscribeLocalEvent<FixturesComponent, ComponentGetState>(OnGetState);
             SubscribeLocalEvent<FixturesComponent, ComponentHandleState>(OnHandleState);
             _physicsQuery = GetEntityQuery<PhysicsComponent>();
             _fixtureQuery = GetEntityQuery<FixturesComponent>();
             _xformQuery = GetEntityQuery<TransformComponent>();
+        }
+
+        private void OnFixtureInit(EntityUid uid, FixturesComponent component, ComponentInit args)
+        {
+            // Fixtures without a PhysicsComponent can still be inspected by EntityLookup.
+            RemoveInvalidFixtures(uid, component, initializing: true);
         }
 
         private void OnShutdown(EntityUid uid, FixturesComponent component, ComponentShutdown args)
@@ -86,11 +93,10 @@ namespace Robust.Shared.Physics.Systems
                 return false;
 
             var fixture = new Fixture(shape, collisionLayer, collisionMask, hard, density, friction, restitution);
-            CreateFixture(uid, id, fixture, updates, manager, body, xform);
-            return true;
+            return CreateFixture(uid, id, fixture, updates, manager, body, xform);
         }
 
-        internal void CreateFixture(
+        internal bool CreateFixture(
             EntityUid uid,
             string fixtureId,
             Fixture fixture,
@@ -101,11 +107,17 @@ namespace Robust.Shared.Physics.Systems
         {
             DebugTools.Assert(MetaData(uid).EntityLifeStage < EntityLifeStage.Terminating);
 
+            if (_net.IsServer && EntityManager.IsQueuedForDeletion(uid))
+                return false;
+
             if (!_physicsQuery.Resolve(uid, ref body) || !_fixtureQuery.Resolve(uid, ref manager))
             {
                 DebugTools.Assert(false);
-                return;
+                return false;
             }
+
+            if (RejectInvalidFixture(uid, fixtureId, fixture))
+                return false;
 
             if (string.IsNullOrEmpty(fixtureId))
             {
@@ -130,6 +142,7 @@ namespace Robust.Shared.Physics.Systems
             }
 
             // TODO: Set newcontacts to true.
+            return true;
         }
 
         /// <summary>
@@ -366,6 +379,8 @@ namespace Robust.Shared.Physics.Systems
         {
             if (!_physicsQuery.Resolve(uid, ref body) || !_fixtureQuery.Resolve(uid, ref manager))
                 return;
+
+            RemoveInvalidFixtures(uid, manager, body);
 
             var mask = 0;
             var layer = 0;

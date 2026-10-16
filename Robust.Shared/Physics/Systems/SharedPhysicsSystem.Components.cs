@@ -48,6 +48,8 @@ public partial class SharedPhysicsSystem
         var xform = Transform(uid);
         var manager = EnsureComp<FixturesComponent>(uid);
 
+        _fixtures.RemoveInvalidFixtures(uid, manager, component, initializing: true);
+
         if (component.CanCollide && (_containerSystem.IsEntityOrParentInContainer(uid) || xform.MapID == MapId.Nullspace))
         {
             SetCanCollide(uid, false, false, manager: manager, body: component);
