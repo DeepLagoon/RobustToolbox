@@ -29,7 +29,6 @@ namespace Robust.Shared.Physics.Systems
         [Dependency] private SharedPhysicsSystem _physics = default!;
         private EntityQuery<PhysicsComponent> _physicsQuery;
         private EntityQuery<FixturesComponent> _fixtureQuery;
-        private EntityQuery<TransformComponent> _xformQuery;
 
         public override void Initialize()
         {
@@ -41,7 +40,6 @@ namespace Robust.Shared.Physics.Systems
             SubscribeLocalEvent<FixturesComponent, ComponentHandleState>(OnHandleState);
             _physicsQuery = GetEntityQuery<PhysicsComponent>();
             _fixtureQuery = GetEntityQuery<FixturesComponent>();
-            _xformQuery = GetEntityQuery<TransformComponent>();
         }
 
         private void OnFixtureInit(EntityUid uid, FixturesComponent component, ComponentInit args)
@@ -53,7 +51,6 @@ namespace Robust.Shared.Physics.Systems
         private void OnShutdown(EntityUid uid, FixturesComponent component, ComponentShutdown args)
         {
             _physicsQuery.TryGetComponent(uid, out var body);
-            _xformQuery.TryGetComponent(uid, out var xform);
 
             foreach (var fixture in component.Fixtures.Values)
             {
@@ -62,7 +59,7 @@ namespace Robust.Shared.Physics.Systems
                     _physics.DestroyContact(contact);
                 }
 
-                _lookup.ReleaseProxies(uid, fixture, xform);
+                _lookup.ReleaseProxies(fixture);
             }
 
             if (body != null)
@@ -205,8 +202,6 @@ namespace Robust.Shared.Physics.Systems
                 return;
             }
 
-            var proxyTree = _lookup.GetProxyBroadphaseTree(uid, xform);
-
             // Temporary debug block for trying to help catch a bug where grid fixtures disappear without the chunk's
             // fixture set being updated
 #if DEBUG
@@ -224,7 +219,7 @@ namespace Robust.Shared.Physics.Systems
                 _physics.DestroyContact(contact);
             }
 
-            _lookup.ReleaseProxies(fixture, proxyTree);
+            _lookup.ReleaseProxies(fixture);
 
             manager.Fixtures.Remove(fixtureId);
 
