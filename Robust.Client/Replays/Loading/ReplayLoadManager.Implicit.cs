@@ -37,7 +37,7 @@ public sealed partial class ReplayLoadManager
         _implicitData[prototype] = (list, set);
 
         var entCount = _entMan.EntityCount;
-        var uid = _entMan.Spawn(prototype);
+        var uid = _entMan.SpawnEntity(prototype, MapCoordinates.Nullspace);
 
         foreach (var (netId, component) in _entMan.GetNetComponents(uid))
         {

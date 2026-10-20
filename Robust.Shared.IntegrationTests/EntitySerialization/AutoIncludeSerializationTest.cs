@@ -57,9 +57,9 @@ internal sealed partial class AutoIncludeSerializationTest : RobustIntegrationTe
             var gridUid = mapSys.CreateGridEntity(mapId);
             mapSys.SetTile(gridUid, Vector2i.Zero, new Tile(tDef.TileId));
 
-            var onGridUid = entMan.SpawnAttachedTo(null, new EntityCoordinates(gridUid, 0.5f, 0.5f));
-            var offGridUid = entMan.Spawn(null, new MapCoordinates(10f, 10f, mapId));
-            var nullSpaceUid = entMan.Spawn();
+            var onGridUid = entMan.SpawnEntity(null, new EntityCoordinates(gridUid, 0.5f, 0.5f));
+            var offGridUid = entMan.SpawnEntity(null, new MapCoordinates(10f, 10f, mapId));
+            var nullSpaceUid = entMan.SpawnEntity(null, MapCoordinates.Nullspace);
 
             map = Get(mapUid, entMan);
             grid = Get(gridUid, entMan);
@@ -127,7 +127,7 @@ internal sealed partial class AutoIncludeSerializationTest : RobustIntegrationTe
         // Re-spawn the nullspace entity
         await server.WaitPost(() =>
         {
-            var nullSpaceUid = entMan.Spawn();
+            var nullSpaceUid = entMan.SpawnEntity(null, MapCoordinates.Nullspace);
             nullSpace = Get(nullSpaceUid, entMan);
             nullSpace.Comp2.Id = nameof(nullSpace);
         });
@@ -232,11 +232,11 @@ internal sealed partial class AutoIncludeSerializationTest : RobustIntegrationTe
             otherMap = Get(otherMapUid, entMan);
             otherMap.Comp2.Id = nameof(otherMap);
 
-            var otherEntUid = entMan.Spawn(null, new MapCoordinates(0, 0, otherMapId));
+            var otherEntUid = entMan.SpawnEntity(null, new MapCoordinates(0, 0, otherMapId));
             otherEnt = Get(otherEntUid, entMan);
             otherEnt.Comp2.Id = nameof(otherEnt);
 
-            var nullSpaceUid = entMan.Spawn();
+            var nullSpaceUid = entMan.SpawnEntity(null, MapCoordinates.Nullspace);
             nullSpace = Get(nullSpaceUid, entMan);
             nullSpace.Comp2.Id = nameof(nullSpace);
         });

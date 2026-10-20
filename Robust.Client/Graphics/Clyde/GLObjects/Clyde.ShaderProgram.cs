@@ -17,8 +17,7 @@ namespace Robust.Client.Graphics.Clyde
         /// </summary>
         private sealed class GLShaderProgram
         {
-            // Uniform locations are GLint values and can exceed 127 in shaders with arrays.
-            private readonly int?[] _uniformIntCache = new int?[UniCount];
+            private readonly sbyte?[] _uniformIntCache = new sbyte?[UniCount];
             private readonly Dictionary<string, int> _uniformCache = new();
             public uint Handle = 0;
             private GLShader? _fragmentShader;
@@ -201,7 +200,7 @@ namespace Robust.Client.Graphics.Clyde
 
                 index = GL.GetUniformLocation(Handle, name);
                 _clyde.CheckGlError();
-                _uniformIntCache[id] = index;
+                _uniformIntCache[id] = (sbyte)index;
                 return index != -1;
             }
 

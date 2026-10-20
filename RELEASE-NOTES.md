@@ -47,11 +47,18 @@ END TEMPLATE-->
 
 ### Other
 
-* `SpawnEntity` and the `EntityCoordinates` version of `SpawnEntities` have been marked as obsolete.
+*None yet*
 
 ### Internal
 
 *None yet*
+
+
+## 292.0.1
+
+### Breaking changes
+
+* ImageSharp's dynamic/automatic decoder detection code (used in Image.Load()) no longer includes TIFF (due to security vulnerabilities)
 
 
 ## 292.0.0

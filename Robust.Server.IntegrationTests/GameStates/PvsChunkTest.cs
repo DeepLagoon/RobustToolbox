@@ -67,8 +67,8 @@ public sealed class PvsChunkTest : RobustIntegrationTest
             mapSys.SetTile(grid, gridComp, Vector2i.Zero, new Tile(1));
             var gridCoords = new EntityCoordinates(grid, .5f, .5f);
 
-            player = sEntMan.SpawnAttachedTo(null, mapCoords);
-            entity = sEntMan.SpawnAttachedTo(null, gridCoords);
+            player = sEntMan.SpawnEntity(null, mapCoords);
+            entity = sEntMan.SpawnEntity(null, gridCoords);
 
             // Attach player.
             var session = sPlayerMan.Sessions.First();

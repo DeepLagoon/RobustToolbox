@@ -1,6 +1,6 @@
-using System;
 using System.Collections.Generic;
 using System.Diagnostics.CodeAnalysis;
+using Robust.Shared.Collections;
 using Robust.Shared.Containers;
 using Robust.Shared.Map;
 using Robust.Shared.Maths;
@@ -10,14 +10,14 @@ namespace Robust.Shared.GameObjects;
 
 public partial interface IEntityManager
 {
-    [Obsolete($"Call {nameof(SpawnEntitiesAttachedTo)} directly.")]
+    // This method will soon be marked as obsolete.
     EntityUid[] SpawnEntities(EntityCoordinates coordinates, List<string?> protoNames)
         => SpawnEntitiesAttachedTo(coordinates, protoNames);
 
-    [Obsolete($"Call {nameof(SpawnAttachedTo)} directly or switch to {nameof(SpawnAtPosition)}.")]
+    // This method will soon be marked as obsolete.
     EntityUid SpawnEntity(string? protoName, EntityCoordinates coordinates, ComponentRegistry? overrides = null);
 
-    [Obsolete($"Call {nameof(Spawn)} directly.")]
+    // This method will soon be marked as obsolete.
     EntityUid SpawnEntity(string? protoName, MapCoordinates coordinates, ComponentRegistry? overrides = null);
 
     EntityUid[] SpawnEntities(MapCoordinates coordinates, params string?[] protoNames);

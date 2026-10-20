@@ -7,16 +7,17 @@ using System.Runtime.CompilerServices;
 using Robust.Shared.Collections;
 using Robust.Shared.Containers;
 using Robust.Shared.Maths;
+using Robust.Shared.Serialization;
 
 namespace Robust.Shared.GameObjects;
 
 public partial class EntityManager
 {
-    [Obsolete($"Call {nameof(SpawnAttachedTo)} directly or switch to {nameof(SpawnAtPosition)}.")]
+    // This method will soon(TM) be marked as obsolete.
     public EntityUid SpawnEntity(string? protoName, EntityCoordinates coordinates, ComponentRegistry? overrides = null)
         => SpawnAttachedTo(protoName, coordinates, overrides);
 
-    [Obsolete($"Call {nameof(Spawn)} directly.")]
+    // This method will soon(TM) be marked as obsolete.
     public EntityUid SpawnEntity(string? protoName, MapCoordinates coordinates, ComponentRegistry? overrides = null)
         => Spawn(protoName, coordinates, overrides);
 

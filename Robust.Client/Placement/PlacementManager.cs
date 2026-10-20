@@ -722,7 +722,7 @@ namespace Robust.Client.Placement
         private Entity<SpriteComponent> SetupPlacementOverlayEntity()
         {
             EnsureNoPlacementOverlayEntity();
-            CurrentPlacementOverlayEntity = EntityManager.Spawn();
+            CurrentPlacementOverlayEntity = EntityManager.SpawnEntity(null, MapCoordinates.Nullspace);
             return (CurrentPlacementOverlayEntity.Value, EntityManager.EnsureComponent<SpriteComponent>(CurrentPlacementOverlayEntity.Value));
         }
 
@@ -734,7 +734,7 @@ namespace Robust.Client.Placement
             CurrentPrototype = prototype;
             IsActive = true;
 
-            CurrentPlacementOverlayEntity = EntityManager.Spawn(templateName);
+            CurrentPlacementOverlayEntity = EntityManager.SpawnEntity(templateName, MapCoordinates.Nullspace);
             EntityManager.RunMapInit(
                 CurrentPlacementOverlayEntity.Value,
                 EntityManager.GetComponent<MetaDataComponent>(CurrentPlacementOverlayEntity.Value));

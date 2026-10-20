@@ -23,7 +23,7 @@ namespace Robust.Client.Console.Commands
             }
 
             var entityManager = _entityManager;
-            entityManager.SpawnAttachedTo(args[0], entityManager.GetComponent<TransformComponent>(controlled).Coordinates);
+            entityManager.SpawnEntity(args[0], entityManager.GetComponent<TransformComponent>(controlled).Coordinates);
         }
     }
 }

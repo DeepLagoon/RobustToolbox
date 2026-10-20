@@ -31,7 +31,7 @@ public partial class AddRemoveComponentBenchmark
 
         for (var i = 0; i < N; i++)
         {
-            _entityManager.SpawnAttachedTo(null, coords);
+            _entityManager.SpawnEntity(null, coords);
         }
     }
 
