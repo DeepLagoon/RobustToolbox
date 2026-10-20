@@ -67,7 +67,9 @@ namespace Robust.Client.WebView.Cef
 
             lock (_resourceRequestHandlers)
             {
+#if DEVELOPMENT
                 _sawmill.Debug($"HANDLING REQUEST: {request.Url}");
+#endif
 
                 var context = new CefRequestHandlerContext(isNavigation, isDownload, requestInitiator, request);
 
