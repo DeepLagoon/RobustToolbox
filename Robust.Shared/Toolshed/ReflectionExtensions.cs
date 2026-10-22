@@ -4,6 +4,7 @@ using System.Linq;
 using System.Linq.Expressions;
 using System.Reflection;
 using Robust.Shared.Exceptions;
+using Robust.Shared.IoC;
 using Robust.Shared.Log;
 using Robust.Shared.Toolshed.Syntax;
 using Robust.Shared.Toolshed.TypeParsers;
@@ -226,11 +227,12 @@ internal static class ReflectionExtensions
 
     public static void DumpGenericInfo(this Type t)
     {
-        Logger.Debug($"Info for {t.PrettyName()}");
-        Logger.Debug(
+        var sawmill = IoCManager.Resolve<ILogManager>().RootSawmill;
+        sawmill.Debug($"Info for {t.PrettyName()}");
+        sawmill.Debug(
             $"GP {t.IsGenericParameter} | MP {t.IsGenericMethodParameter} | TP {t.IsGenericTypeParameter} | DEF {t.IsGenericTypeDefinition} | TY {t.IsGenericType} | CON {t.IsConstructedGenericType}");
         if (t.IsGenericParameter)
-            Logger.Debug($"CONSTRAINTS: {string.Join(", ", t.GetGenericParameterConstraints().Select(PrettyName))}");
+            sawmill.Debug($"CONSTRAINTS: {string.Join(", ", t.GetGenericParameterConstraints().Select(PrettyName))}");
         if (!t.IsGenericTypeDefinition && IsGenericRelated(t) && t.IsGenericType)
             DumpGenericInfo(t.GetGenericTypeDefinition());
         foreach (var p in t.GetGenericArguments())

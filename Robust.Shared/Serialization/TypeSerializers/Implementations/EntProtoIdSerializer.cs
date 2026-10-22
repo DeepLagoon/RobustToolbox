@@ -49,7 +49,7 @@ public sealed partial class EntProtoIdSerializer : ITypeSerializer<EntProtoId, V
 ///     Serializer used automatically for <see cref="EntProtoId"/> types.
 /// </summary>
 [TypeSerializer]
-public sealed class EntProtoIdSerializer<T> : ITypeSerializer<EntProtoId<T>, ValueDataNode>, ITypeCopyCreator<EntProtoId<T>> where T : IComponent, new()
+public sealed partial class EntProtoIdSerializer<T> : ITypeSerializer<EntProtoId<T>, ValueDataNode>, ITypeCopyCreator<EntProtoId<T>> where T : IComponent, new()
 {
     [Dependency] private IComponentFactory _factory = default!;
     [Dependency] private IPrototypeManager _proto = default!;

@@ -7,7 +7,7 @@ using Robust.Shared.Maths;
 
 namespace Robust.Shared.GameObjects;
 
-public abstract class SharedPointLightSystem : EntitySystem
+public abstract partial class SharedPointLightSystem : EntitySystem
 {
     [Dependency] protected SharedLightTreeSystem _lightTree = default!;
 

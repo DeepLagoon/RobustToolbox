@@ -14,7 +14,7 @@ namespace Robust.Shared.Physics.Systems;
 
 public sealed partial class FixtureSystem
 {
-    [Dependency] private readonly INetManager _net = default!;
+    [Dependency] private INetManager _net = default!;
 
     // Validate before mass calculation, broadphase insertion, or collision-change subscribers can
     // inspect shapes. In particular, Box2 now clamps inverted bounds to a degenerate rectangle;

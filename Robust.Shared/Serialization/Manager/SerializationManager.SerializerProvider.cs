@@ -469,6 +469,9 @@ public sealed partial class SerializationManager
             var typeArguments = type.GetGenericArguments();
             foreach (var @interface in type.GetInterfaces())
             {
+                if (!@interface.IsGenericType)
+                    continue;
+
                 foreach (var typeInterface in _typeInterfaces)
                 {
                     if (!@interface.GetGenericTypeDefinition().HasSameMetadataDefinitionAs(typeInterface))

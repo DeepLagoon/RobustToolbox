@@ -85,7 +85,7 @@ public abstract partial class ChunkEntitySystem : EntitySystem
             throw new ArgumentException($"Chunk entity root {ToPrettyString(root)} is not a map or grid.", nameof(root));
 
         var rootMeta = _metaQuery.GetComponent(root);
-        var uid = EntityManager.PredictedSpawn(
+        var uid = PredictedSpawn(
             ChunkEntityPrototype,
             doMapInit: rootMeta.EntityLifeStage == EntityLifeStage.MapInitialized);
 

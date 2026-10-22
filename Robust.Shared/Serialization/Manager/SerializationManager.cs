@@ -22,8 +22,9 @@ namespace Robust.Shared.Serialization.Manager
 {
     public sealed partial class SerializationManager : ISerializationManager
     {
-        [Dependency] private readonly INetManager _net = default!;
-        [Dependency] private readonly IReflectionManager _reflectionManager = default!;
+        [Dependency] private INetManager _net = default!;
+        [Dependency] private IReflectionManager _reflectionManager = default!;
+        [Dependency] private IDependencyCollection _dependencies = default!;
 
         public IReflectionManager ReflectionManager => _reflectionManager;
 
@@ -36,8 +37,7 @@ namespace Robust.Shared.Serialization.Manager
 
         private ImmutableHashSet<Type> _copyByRefRegistrations = ImmutableHashSet<Type>.Empty;
 
-        [field: Dependency]
-        public IDependencyCollection DependencyCollection { get; } = default!;
+        public IDependencyCollection DependencyCollection => _dependencies;
 
         public bool IsServer { get; private set; }
 

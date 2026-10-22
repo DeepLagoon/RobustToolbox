@@ -347,7 +347,7 @@ namespace Robust.Shared.Serialization.Manager
                         {
                             case ValueDataNode value:
                             {
-                                instanceProvider ??= T.StaticInstantiate;
+                                instanceProvider ??= GetOrCreateInstantiator<T>(false);
                                 val = instanceProvider();
                                 var selfSerialize = (ISelfSerialize) val;
                                 selfSerialize.Deserialize(value.Value);
@@ -364,14 +364,14 @@ namespace Robust.Shared.Serialization.Manager
                         {
                             case MappingDataNode mapping:
                             {
-                                instanceProvider ??= T.StaticInstantiate;
+                                instanceProvider ??= GetOrCreateInstantiator<T>(false);
                                 val = instanceProvider();
-                                T.Read(ref val, mapping, this, hookCtx, context);
+                                GetDefinition<T>()!.Populate(ref val, mapping, this, hookCtx, context);
                                 break;
                             }
                             case ValueDataNode value:
                             {
-                                instanceProvider ??= T.StaticInstantiate;
+                                instanceProvider ??= GetOrCreateInstantiator<T>(false);
                                 val = instanceProvider();
                                 if (value.Value != string.Empty)
                                     throw new ArgumentException($"No mapping node provided for type {typeof(T)} at line: {node.Start.Line}");
@@ -959,7 +959,7 @@ namespace Robust.Shared.Serialization.Manager
                         {
                             case ValueDataNode value:
                             {
-                                instanceProvider ??= T.StaticInstantiate;
+                                instanceProvider ??= GetOrCreateInstantiator<T>(false);
                                 val = instanceProvider();
                                 var selfSerialize = (ISelfSerialize) val;
                                 selfSerialize.Deserialize(value.Value);
@@ -976,14 +976,14 @@ namespace Robust.Shared.Serialization.Manager
                         {
                             case MappingDataNode mapping:
                             {
-                                instanceProvider ??= T.StaticInstantiate;
+                                instanceProvider ??= GetOrCreateInstantiator<T>(false);
                                 val = instanceProvider();
-                                T.Read(ref val, mapping, this, hookCtx, context);
+                                GetDefinition<T>()!.Populate(ref val, mapping, this, hookCtx, context);
                                 break;
                             }
                             case ValueDataNode value:
                             {
-                                instanceProvider ??= T.StaticInstantiate;
+                                instanceProvider ??= GetOrCreateInstantiator<T>(false);
                                 val = instanceProvider();
                                 if (value.Value != string.Empty)
                                     throw new ArgumentException($"No mapping node provided for type {baseType} at line: {node.Start.Line}");
