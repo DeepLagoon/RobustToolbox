@@ -103,6 +103,10 @@ namespace Robust.Client.GameObjects
         [SubscribeLocalEvent]
         private void OnInit(EntityUid uid, SpriteComponent component, ComponentInit args)
         {
+            // Map deserialization can add an empty component before copying its sprite data.
+            if (component.Layers.Count == 0)
+                LoadPrototypeData((uid, component));
+
             try
             {
                 for (var i = 0; i < component.PostShaders.Count; i++)
