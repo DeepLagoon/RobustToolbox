@@ -94,6 +94,8 @@ internal partial class Clyde
                 WindowId = ev.windowID,
                 Type = ev.type,
                 Button = ev.button,
+                X = ev.x,
+                Y = ev.y,
                 Mods = mods
             });
         }
@@ -215,6 +217,8 @@ internal partial class Clyde
             public uint WindowId;
             public ET Type;
             public byte Button;
+            public float X;
+            public float Y;
             public SDL.SDL_Keymod Mods;
         }
 

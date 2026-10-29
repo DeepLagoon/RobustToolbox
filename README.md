@@ -1,25 +1,31 @@
 ![Robust Toolbox](https://raw.githubusercontent.com/space-wizards/asset-dump/3dd3078e49e3a7e06709a6e0fc6e3223d8d44ca2/robust.png)
 
-Robust Toolbox is an engine primarily being developed for [Space Station 14](https://github.com/space-wizards/space-station-14), although we're working on making it usable for both [singleplayer](https://github.com/space-wizards/RobustToolboxTemplateSingleplayer) and [multiplayer](https://github.com/space-wizards/RobustToolboxTemplate) projects.
+Этот репозиторий содержит форк движка Robust Toolbox для [DeepLagoon Station](https://github.com/DeepLagoon/DeepLagoon-Station).
 
-Use the [content repo](https://github.com/space-wizards/space-station-14) for actual development, even if you're modifying the engine itself.
+Исходный [Robust Toolbox](https://github.com/space-wizards/RobustToolbox) разрабатывается прежде всего для [Space Station 14](https://github.com/space-wizards/space-station-14). Также ведётся работа над его использованием в [однопользовательских](https://github.com/space-wizards/RobustToolboxTemplateSingleplayer) и [многопользовательских](https://github.com/space-wizards/RobustToolboxTemplate) проектах.
 
-## Project Links
+Для разработки DeepLagoon используйте [репозиторий игрового контента](https://github.com/DeepLagoon/DeepLagoon-Station), даже если вносите изменения в сам движок.
 
-[Website](https://spacestation14.io/) | [Discord](https://discord.gg/t2jac3p) | [Forum](https://forum.spacestation14.io/) | [Steam](https://store.steampowered.com/app/1255460/Space_Station_14/) | [Standalone Download](https://spacestation14.io/about/nightlies/)
+## Ссылки DeepLagoon
 
-## Documentation/Wiki
+[Игровой контент](https://github.com/DeepLagoon/DeepLagoon-Station) | [Движок](https://github.com/DeepLagoon/RobustToolbox) | [Discord](https://discord.gg/uW7tgZeqVg)
 
-The [wiki](https://docs.spacestation14.io/) has documentation on SS14s content, engine, game design and more. We also have lots of resources for new contributors to the project.
+## Ссылки Space Station 14
 
-## Contributing
+[Сайт](https://spacestation14.io/) | [Discord](https://discord.gg/t2jac3p) | [Форум](https://forum.spacestation14.io/) | [Steam](https://store.steampowered.com/app/1255460/Space_Station_14/) | [Скачать клиент](https://spacestation14.io/about/nightlies/)
 
-We are happy to accept contributions from anybody. Get in Discord or IRC if you want to help. We've got a [list of issues](https://github.com/space-wizards/RobustToolbox/issues) that need to be done and anybody can pick them up. Don't be afraid to ask for help either!
+## Документация и вики
 
-## Building
+В [документации Space Wizards](https://docs.spacestation14.io/) описаны игровой контент SS14, движок, геймдизайн и другие темы. Там же есть материалы для новых участников разработки.
 
-This repository is the **engine** part of SS14. It's the base engine all SS14 servers will be built on. As such, it does not start on its own: it needs the [content repo](https://github.com/space-wizards/space-station-14). Think of Robust Toolbox as BYOND in the context of Space Station 13.
+## Участие в разработке
 
-## Legal Info
+Мы рады помощи в разработке DeepLagoon. Присоединяйтесь к нашему [Discord](https://discord.gg/uW7tgZeqVg) или выбирайте задачу в [списке Issues этого форка](https://github.com/DeepLagoon/RobustToolbox/issues). Если нужна помощь, обращайтесь.
 
-See [legal.md](https://github.com/space-wizards/RobustToolbox/blob/master/legal.md) for licenses and copyright.
+## Сборка
+
+Этот репозиторий содержит **движок** SS14. Для запуска игры ему нужен [репозиторий игрового контента](https://github.com/DeepLagoon/DeepLagoon-Station). Инструкции по сборке DeepLagoon приведены в [README игрового репозитория](https://github.com/DeepLagoon/DeepLagoon-Station#сборка). По своей роли в проекте Robust Toolbox похож на BYOND для Space Station 13.
+
+## Правовая информация
+
+Условия лицензирования и сведения об авторских правах приведены в [legal.md](legal.md). Отдельные файлы и зависимости могут распространяться на собственных условиях.

@@ -161,6 +161,17 @@ internal partial class Clyde
             if (windowReg == null)
                 return;
 
+            // Absolute devices can click at a new position without a preceding motion event.
+            var position = new Vector2(ev.X, ev.Y) * windowReg.PixelRatio;
+            if (position != windowReg.LastMousePos || _clyde._currentHoveredWindow != windowReg)
+            {
+                var delta = (position - windowReg.LastMousePos) / windowReg.PixelRatio;
+                ProcessEventMouseMotion(new EventMouseMotion
+                {
+                    WindowId = ev.WindowId, X = ev.X, Y = ev.Y, XRel = delta.X, YRel = delta.Y
+                });
+            }
+
             var button = ConvertSdl3Button(ev.Button);
             var key = Mouse.MouseButtonToKey(button);
             EmitKeyEvent(key, ev.Type, false, ev.Mods, 0, 0);
