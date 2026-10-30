@@ -101,7 +101,9 @@ internal partial class UserInterfaceManager
         internal static float CalculateUIScale(float osScale, IConfigurationManager cfg)
         {
             var cfgScale = cfg.GetCVar(CVars.DisplayUIScale);
-            return cfgScale == 0 ? osScale : cfgScale;
+            var scale = cfgScale == 0 ? osScale : cfgScale;
+            // Some window backends temporarily report zero while changing DPI or minimizing.
+            return float.IsFinite(scale) && scale > 0f ? scale : 1f;
         }
 
         private float CalculateAutoScale(WindowRoot root)
@@ -114,15 +116,28 @@ internal partial class UserInterfaceManager
             if (!_autoScaleEnabled || root.DisableAutoScaling || windowSize.X <= 0 || windowSize.Y <= 0)
                 return osScale;
 
-            var maxScaleRes = _resolutionAutoScaleUpper;
-            var minScaleRes = _resolutionAutoScaleLower;
-            var autoScaleMin = _resolutionAutoScaleMinValue;
-            float scaleRatioX;
-            float scaleRatioY;
+            return CalculateAutoScale(windowSize, osScale, _resolutionAutoScaleLower,
+                _resolutionAutoScaleUpper, _resolutionAutoScaleMinValue);
+        }
 
-            //Calculate the scale ratios and clamp it between the maximums and minimums
-            scaleRatioX = Math.Clamp(((float) windowSize.X - minScaleRes.X) / (maxScaleRes.X - minScaleRes.X) * osScale, autoScaleMin, osScale);
-            scaleRatioY = Math.Clamp(((float) windowSize.Y - minScaleRes.Y) / (maxScaleRes.Y - minScaleRes.Y) * osScale, autoScaleMin, osScale);
+        internal static float CalculateAutoScale(Vector2i windowSize, float osScale,
+            Vector2i minScaleRes, Vector2i maxScaleRes, float autoScaleMin)
+        {
+            if (!float.IsFinite(osScale) || osScale <= 0f)
+                osScale = 1f;
+
+            if (windowSize.X <= 0 || windowSize.Y <= 0)
+                return osScale;
+
+            // A valid manual scale may be smaller than the configured autoscale minimum.
+            // Invalid resolution ranges must not produce NaN or reverse the scaling slope.
+            autoScaleMin = float.IsFinite(autoScaleMin) && autoScaleMin > 0f
+                ? Math.Min(autoScaleMin, osScale)
+                : Math.Min(0.5f, osScale);
+            var scaleRatioX = maxScaleRes.X <= minScaleRes.X ? osScale :
+                Math.Clamp(((float) windowSize.X - minScaleRes.X) / ((float) maxScaleRes.X - minScaleRes.X) * osScale, autoScaleMin, osScale);
+            var scaleRatioY = maxScaleRes.Y <= minScaleRes.Y ? osScale :
+                Math.Clamp(((float) windowSize.Y - minScaleRes.Y) / ((float) maxScaleRes.Y - minScaleRes.Y) * osScale, autoScaleMin, osScale);
             //Take the smallest UIScale value and use it for UI scaling
             return Math.Min(scaleRatioX, scaleRatioY);
         }

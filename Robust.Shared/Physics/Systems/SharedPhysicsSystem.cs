@@ -255,10 +255,11 @@ namespace Robust.Shared.Physics.Systems
         /// <param name="prediction">Should only predicted entities be considered in this simulation step?</param>
         protected void SimulateWorld(float deltaTime, bool prediction)
         {
-            var frameTime = deltaTime / _substeps;
+            var substeps = GetGridMotionSubsteps(deltaTime, prediction);
+            var frameTime = deltaTime / substeps;
 
             EffectiveCurTime = _gameTiming.CurTime;
-            for (int i = 0; i < _substeps; i++)
+            for (int i = 0; i < substeps; i++)
             {
                 var updateBeforeSolve = new PhysicsUpdateBeforeSolveEvent(prediction, frameTime);
                 using (_prof.Group("PreSolve", Color.Green))
@@ -314,7 +315,7 @@ namespace Robust.Shared.Physics.Systems
                 }
 
                 // On last substep (or main step where no substeps occured) we'll update all of the lerp data.
-                if (i == _substeps - 1)
+                if (i == substeps - 1)
                 {
                     FinalStep();
                 }
