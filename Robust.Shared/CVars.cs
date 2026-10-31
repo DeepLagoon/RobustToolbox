@@ -332,7 +332,7 @@ namespace Robust.Shared
 
         /// <summary>
         /// Maximum allowed delay between the current tick and a client's last acknowledged tick before we send the
-        /// next game state reliably and simply force update the acked tick,
+        /// next game state reliably. The state still needs to be acknowledged by the client.
         /// </summary>
         public static readonly CVarDef<int> NetForceAckThreshold =
             CVarDef.Create("net.force_ack_threshold", 60, CVar.ARCHIVE | CVar.SERVERONLY);

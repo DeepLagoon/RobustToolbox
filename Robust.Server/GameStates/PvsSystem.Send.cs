@@ -55,11 +55,9 @@ internal sealed partial class PvsSystem
             if (msg.HasWritten && msg.ShouldSendReliably())
             {
                 data.RequestedFull = false;
-                lock (PendingAcks)
-                {
-                    data.LastReceivedAck = sendTick;
-                    PendingAcks.Add(data.Session);
-                }
+                // Reliable transport enqueueing is not a client state acknowledgement. In particular, a
+                // delayed creation state must remain part of subsequent deltas until the client accepts it.
+                // Otherwise PVS marks unseen entities as known and stops sending their metadata.
             }
         }
         else
