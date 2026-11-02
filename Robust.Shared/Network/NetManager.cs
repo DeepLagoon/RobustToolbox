@@ -78,6 +78,17 @@ namespace Robust.Shared.Network
             "robust_net_dropped",
             "Number of incoming messages that have been dropped.");
 
+        private static readonly Counter SocketWouldBlockMetrics = Metrics.CreateCounter(
+            "robust_net_socket_would_block", "Local UDP send attempts blocked by a full socket buffer.");
+        private static readonly Counter SocketRetriesMetrics = Metrics.CreateCounter(
+            "robust_net_socket_retried_packets", "Datagrams sent successfully from the bounded socket retry queue.");
+        private static readonly Counter SocketExpiredMetrics = Metrics.CreateCounter(
+            "robust_net_socket_expired_packets", "Datagrams discarded after the socket retry age limit.");
+        private static readonly Counter SocketOverflowMetrics = Metrics.CreateCounter(
+            "robust_net_socket_queue_overflows", "Datagrams discarded at the socket retry byte limit.");
+        private static readonly Gauge SocketPendingBytesMetrics = Metrics.CreateGauge(
+            "robust_net_socket_pending_bytes", "Payload bytes currently waiting in bounded socket retry queues.");
+
         // TODO: Disabled for now since calculating these from Lidgren is way too expensive.
         // Need to go through and have Lidgren properly keep track of counters for these.
         /*
@@ -632,6 +643,11 @@ namespace Robust.Shared.Network
             var resentDelays = 0L;
             var resentHoles = 0L;
             var dropped = 0L;
+            var socketWouldBlock = 0L;
+            var socketRetries = 0L;
+            var socketExpired = 0L;
+            var socketOverflows = 0L;
+            var socketPending = 0L;
             /*
             var unsent = 0L;
             var stored = 0L;
@@ -707,6 +723,11 @@ namespace Robust.Shared.Network
                 resentDelays += statistics.ResentMessagesDueToDelay;
                 resentHoles += statistics.ResentMessagesDueToHole;
                 dropped += statistics.DroppedMessages;
+                socketWouldBlock += peer.Peer.SocketWouldBlockCount;
+                socketRetries += peer.Peer.SocketRetriedPackets;
+                socketExpired += peer.Peer.SocketExpiredPackets;
+                socketOverflows += peer.Peer.SocketQueueOverflows;
+                socketPending += peer.Peer.SocketPendingBytes;
 
                 /*
                 statistics.CalculateUnsentAndStoredMessages(out var pUnsent, out var pStored);
@@ -734,6 +755,11 @@ namespace Robust.Shared.Network
             MessagesResentDelayMetrics.IncTo(resentDelays);
             MessagesResentHoleMetrics.IncTo(resentHoles);
             MessagesDroppedMetrics.IncTo(dropped);
+            SocketWouldBlockMetrics.IncTo(socketWouldBlock);
+            SocketRetriesMetrics.IncTo(socketRetries);
+            SocketExpiredMetrics.IncTo(socketExpired);
+            SocketOverflowMetrics.IncTo(socketOverflows);
+            SocketPendingBytesMetrics.Set(socketPending);
 
             _prof.WriteValue("Count Processed", countProcessed);
             _prof.WriteValue("Count Data Processed", countDataProcessed);
@@ -807,6 +833,8 @@ namespace Robust.Shared.Network
 
             if (IsServer)
             {
+                netConfig.EnableSendBackpressure = _config.GetCVar(CVars.NetSendBackpressure);
+                netConfig.ReliableSendWindowBytes = Math.Max(0, _config.GetCVar(CVars.NetReliableWindowBytes));
                 netConfig.SetMessageTypeEnabled(NetIncomingMessageType.ConnectionApproval, true);
                 netConfig.MaximumConnections = _config.GetEffectiveMaxConnections();
             }

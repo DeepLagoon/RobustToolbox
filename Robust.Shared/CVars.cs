@@ -92,6 +92,14 @@ namespace Robust.Shared
         public static readonly CVarDef<int> NetSendBufferSize =
             CVarDef.Create("net.sendbuffersize", 131071, CVar.ARCHIVE);
 
+        /// <summary>Bounded retry and backpressure for a temporarily full server UDP socket.</summary>
+        public static readonly CVarDef<bool> NetSendBackpressure =
+            CVarDef.Create("net.send_backpressure", false, CVar.SERVERONLY | CVar.ARCHIVE);
+
+        /// <summary>Maximum adaptive reliable byte window across all channels of one connection; zero disables the limit.</summary>
+        public static readonly CVarDef<int> NetReliableWindowBytes =
+            CVarDef.Create("net.reliable_window_bytes", 131072, CVar.SERVERONLY | CVar.ARCHIVE);
+
         /// <summary>
         /// Receive buffer size on the UDP sockets used for main game networking.
         /// </summary>

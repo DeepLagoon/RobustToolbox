@@ -525,7 +525,8 @@ public abstract partial class SharedPhysicsSystem
             int idx;
 
             // Bodies not touching anything, hence we can just add it to the lone island.
-            if (contacts.Count == 0 && joints.Count == 0)
+            var loneBody = contacts.Count == 0 && joints.Count == 0;
+            if (loneBody)
             {
                 DebugTools.Assert(bodies.Count == 1 && bodies[0].Comp1.BodyType != BodyType.Static);
                 loneIsland.MapUid = mapUid.Value;
@@ -555,6 +556,15 @@ public abstract partial class SharedPhysicsSystem
                 }
 
                 body.IslandIndex[idx] = i;
+            }
+
+            if (loneBody)
+            {
+                // Only the body was transferred to loneIsland. Its temporary lists
+                // still belong to this iteration and must be returned to the pools.
+                _islandBodyPool.Return(bodies);
+                _islandContactPool.Return(contacts);
+                _islandJointPool.Return(joints);
             }
         }
 

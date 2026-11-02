@@ -6,4 +6,5 @@
 // I mean we have this project here from the weird way we're compiling Lidgren.
 // I could just put this in here... it wouldn't touch the main Lidgren repo at all...
 [assembly: InternalsVisibleTo("Robust.UnitTesting")]
+[assembly: InternalsVisibleTo("Robust.Shared.IntegrationTests")]
 
