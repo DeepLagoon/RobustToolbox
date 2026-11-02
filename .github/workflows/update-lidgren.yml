@@ -1,0 +1,176 @@
+name: Update Lidgren pin
+
+on:
+  schedule:
+    - cron: '7,22,37,52 * * * *'
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: Validate the candidate without updating main
+        type: boolean
+        default: false
+  push:
+    branches: [main]
+    paths: [.github/workflows/update-lidgren.yml]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: update-lidgren-pin-main
+  cancel-in-progress: false
+
+jobs:
+  validate:
+    if: github.repository == 'DeepLagoon/RobustToolbox' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    outputs:
+      changed: ${{ steps.plan.outputs.changed }}
+      previous: ${{ steps.plan.outputs.previous }}
+      candidate: ${{ steps.plan.outputs.candidate }}
+      engine: ${{ steps.plan.outputs.engine }}
+    env:
+      DOTNET_GCHeapHardLimit: '80000000'
+      DOTNET_CLI_TELEMETRY_OPTOUT: '1'
+    steps:
+      - uses: actions/checkout@v4.2.2
+        with:
+          ref: main
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Resolve exact Lidgren commit
+        id: plan
+        shell: bash
+        run: |
+          set -euo pipefail
+          path=Lidgren.Network/Lidgren.Network
+          url=https://github.com/DeepLagoon/Lidgren.Network.git
+          test "$(git config -f .gitmodules submodule.Lidgren.Network.url)" = "$url"
+          test "$(git config -f .gitmodules submodule.Lidgren.Network.branch)" = wizards
+          read -r mode type previous _ < <(git ls-tree HEAD -- "$path")
+          test "$mode $type" = '160000 commit'
+          read -r candidate _ < <(git ls-remote --exit-code "$url" refs/heads/wizards)
+          [[ "$previous" =~ ^[0-9a-f]{40}$ && "$candidate" =~ ^[0-9a-f]{40}$ ]]
+          echo "previous=$previous" >> "$GITHUB_OUTPUT"
+          echo "candidate=$candidate" >> "$GITHUB_OUTPUT"
+          echo "engine=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+          if [[ "$previous" == "$candidate" ]]; then
+            echo 'changed=false' >> "$GITHUB_OUTPUT"
+            echo "Lidgren is already pinned to $candidate." >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo 'changed=true' >> "$GITHUB_OUTPUT"
+            echo "Candidate: $previous -> $candidate" >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Check out candidate without changing other dependency pins
+        if: steps.plan.outputs.changed == 'true'
+        env:
+          PREVIOUS: ${{ steps.plan.outputs.previous }}
+          CANDIDATE: ${{ steps.plan.outputs.candidate }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          path=Lidgren.Network/Lidgren.Network
+          git submodule update --init --recursive
+          git -C "$path" fetch --no-tags origin "$CANDIDATE"
+          git -C "$path" merge-base --is-ancestor "$PREVIOUS" "$CANDIDATE"
+          git -C "$path" checkout --detach "$CANDIDATE"
+          git add -- "$path"
+          test "$(git diff --cached --name-only)" = "$path"
+          git diff --cached --check
+
+      - name: Install test runtimes
+        if: steps.plan.outputs.changed == 'true'
+        uses: actions/setup-dotnet@v4.1.0
+        with:
+          dotnet-version: |
+            8.0.x
+            10.0.x
+
+      - name: Test standalone Lidgren
+        if: steps.plan.outputs.changed == 'true'
+        env:
+          CANDIDATE: ${{ steps.plan.outputs.candidate }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Keep the standalone build outside the engine's Directory.Build.props.
+          standalone="$RUNNER_TEMP/lidgren-standalone"
+          git clone --no-checkout https://github.com/DeepLagoon/Lidgren.Network.git "$standalone"
+          git -C "$standalone" checkout --detach "$CANDIDATE"
+          dotnet test "$standalone/UnitTests/UnitTests.csproj" \
+            --configuration Release --framework net8.0 --disable-build-servers \
+            -m:1 -nr:false -p:UseSharedCompilation=false \
+            --logger 'trx;LogFileName=Lidgren.net8.trx' \
+            --results-directory "$RUNNER_TEMP/lidgren-pin-tests"
+
+      - name: Test engine networking with candidate
+        if: steps.plan.outputs.changed == 'true'
+        run: >-
+          dotnet test Robust.Shared.IntegrationTests/Robust.Shared.IntegrationTests.csproj
+          --configuration Release --disable-build-servers
+          -m:1 -nr:false -p:UseSharedCompilation=false
+          --filter 'FullyQualifiedName~Networking'
+          --logger 'trx;LogFileName=Robust.Networking.trx'
+          --results-directory '${{ runner.temp }}/lidgren-pin-tests'
+
+      - name: Save test results
+        if: always() && steps.plan.outputs.changed == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: lidgren-pin-tests
+          path: ${{ runner.temp }}/lidgren-pin-tests
+          if-no-files-found: warn
+          retention-days: 7
+
+  publish:
+    needs: validate
+    if: needs.validate.outputs.changed == 'true' && !inputs.dry_run
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: write
+    steps:
+      # This job never checks out or executes the candidate dependency. Its write
+      # token is isolated from the build job and can update only the checked pin.
+      - name: Commit validated pin to main
+        uses: actions/github-script@v7
+        env:
+          PREVIOUS: ${{ needs.validate.outputs.previous }}
+          CANDIDATE: ${{ needs.validate.outputs.candidate }}
+          ENGINE: ${{ needs.validate.outputs.engine }}
+        with:
+          script: |
+            const { PREVIOUS: previous, CANDIDATE: candidate, ENGINE: base } = process.env;
+            for (const sha of [previous, candidate, base]) {
+              if (!/^[0-9a-f]{40}$/.test(sha)) throw new Error('Invalid commit SHA');
+            }
+            const owner = 'DeepLagoon';
+            const repo = 'RobustToolbox';
+            const path = 'Lidgren.Network/Lidgren.Network';
+            if (context.repo.owner !== owner || context.repo.repo !== repo)
+              throw new Error('Unexpected target repository');
+            const head = await github.rest.git.getRef({ owner, repo, ref: 'heads/main' });
+            const upstream = await github.rest.git.getRef({ owner, repo: 'Lidgren.Network', ref: 'heads/wizards' });
+            if (head.data.object.sha !== base || upstream.data.object.sha !== candidate) {
+              core.notice('A branch advanced during validation. The next run will validate its latest commits.');
+              return;
+            }
+            const parent = await github.rest.git.getCommit({ owner, repo, commit_sha: base });
+            const tree = await github.rest.git.createTree({ owner, repo,
+              base_tree: parent.data.tree.sha,
+              tree: [{ path, mode: '160000', type: 'commit', sha: candidate }] });
+            const commit = await github.rest.git.createCommit({ owner, repo,
+              message: `chore: pin Lidgren.Network to ${candidate.slice(0, 12)}\n\nValidated from ${previous}.\nSource: https://github.com/DeepLagoon/Lidgren.Network/commit/${candidate}`,
+              tree: tree.data.sha, parents: [base] });
+            const diff = await github.rest.repos.compareCommits({ owner, repo, base, head: commit.data.sha });
+            if (diff.data.files?.length !== 1 || diff.data.files[0].filename !== path)
+              throw new Error('Refusing to publish changes outside the Lidgren gitlink');
+            await github.rest.git.updateRef({ owner, repo, ref: 'heads/main', sha: commit.data.sha, force: false });
+            await core.summary.addHeading('Lidgren pin updated')
+              .addLink(candidate, `https://github.com/DeepLagoon/Lidgren.Network/commit/${candidate}`)
+              .addRaw('\n')
+              .addLink('Engine commit', `https://github.com/DeepLagoon/RobustToolbox/commit/${commit.data.sha}`)
+              .write();
