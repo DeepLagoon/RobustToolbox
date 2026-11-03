@@ -1,6 +1,7 @@
 using System;
 using System.Threading.Tasks;
 using Prometheus;
+using Lidgren.Network;
 using Robust.Shared.GameObjects;
 using Robust.Shared.GameStates;
 using Robust.Shared.IoC;
@@ -59,7 +60,9 @@ internal sealed partial class PvsSystem
     /// </summary>
     private void SerializeSessionState(PvsSession data)
     {
-        if (data.LastReceivedAck == GameTick.Zero && _gameTiming.CurTick < data.InitialStateRetryTick)
+        if (data.LastReceivedAck < data.PendingSnapshotTick
+            && (_gameTiming.CurTick < data.SnapshotRetryTick
+                || !data.Channel.CanSendImmediately(NetDeliveryMethod.ReliableUnordered, 0)))
         {
             // A deferred receiver must retain its unacknowledged deletion history.
             InterlockedHelper.Min(ref _oldestAck, data.LastReceivedAck.Value);

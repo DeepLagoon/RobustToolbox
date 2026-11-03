@@ -19,6 +19,76 @@ public sealed class InitialStateBacklogTest : RobustIntegrationTest
 {
     [TestCase(false)]
     [TestCase(true)]
+    public async Task CreationBurstAfterLobbyAckOnlyPacesBulkSnapshots(bool bulk)
+    {
+        await using var pair = await StartConnectedPair(new() { Pool = false }, new() { Pool = false });
+        var (client, server) = pair;
+        await RunTicksSync(server, client, 5);
+        EntityUid map = default;
+        await server.WaitPost(() =>
+        {
+            server.CfgMan.SetCVar(CVars.NetPVS, false);
+            map = server.System<SharedMapSystem>().CreateMap();
+            server.PlayerMan.JoinGame(server.PlayerMan.Sessions.Single());
+        });
+        await RunTicksSync(server, client, 10);
+        await server.WaitRunTicks(1); // Process the last small lobby ACK before pausing the client.
+
+        GameTick lobbyAck = default;
+        await server.WaitAssertion(() =>
+        {
+            lobbyAck = server.System<PvsSystem>().PlayerData[server.PlayerMan.Sessions.Single()].LastReceivedAck;
+            Assert.That(lobbyAck, Is.GreaterThan(GameTick.Zero));
+        });
+        var received = new List<(Robust.Shared.GameStates.GameState State, int Bytes)>();
+        await client.WaitPost(() =>
+        {
+            var field = client.NetMan.GetType().GetField("_callbacks", BindingFlags.Instance | BindingFlags.NonPublic)!;
+            var callbacks = (Dictionary<Type, ProcessMessage>) field.GetValue(client.NetMan)!;
+            var original = callbacks[typeof(MsgState)];
+            callbacks[typeof(MsgState)] = message =>
+            {
+                var state = (MsgState) message;
+                if (state.MsgSize > MsgState.ReliableThreshold)
+                    received.Add((state.State, state.MsgSize));
+                original(message);
+            };
+        });
+        EntityUid added = default;
+        await server.WaitPost(() =>
+        {
+            var random = new Random(20261104);
+            for (var i = 0; i < (bulk ? 2000 : 1); i++)
+            {
+                added = server.EntMan.SpawnEntity(null, new EntityCoordinates(map, Vector2.Zero));
+                var bytes = new byte[bulk ? 128 : 2048];
+                random.NextBytes(bytes);
+                server.System<MetaDataSystem>().SetEntityName(added, Convert.ToHexString(bytes));
+            }
+        });
+        // Round/map creation can be a large delta even after the lobby was acknowledged.
+        await server.WaitRunTicks(10);
+        await server.WaitAssertion(() =>
+            Assert.That(server.System<PvsSystem>().PlayerData[server.PlayerMan.Sessions.Single()].LastReceivedAck,
+                Is.EqualTo(lobbyAck)));
+        await client.WaitRunTicks(1);
+        await client.WaitAssertion(() =>
+        {
+            Assert.That(received[0].State.FromSequence, Is.GreaterThan(GameTick.Zero));
+            if (bulk)
+                Assert.That(received[0].Bytes, Is.GreaterThan(64 * 1024));
+            else
+                Assert.That(received[0].Bytes, Is.LessThan(64 * 1024));
+            Assert.That(received.Count, Is.EqualTo(bulk ? 1 : 10),
+                "Acknowledging a small lobby state must not allow a heavy creation snapshot to flood the reliable queue");
+        });
+        await RunTicksSync(server, client, 10);
+        await client.WaitAssertion(() =>
+            Assert.That(client.EntMan.TryGetEntity(server.EntMan.GetNetEntity(added), out _), Is.True));
+    }
+
+    [TestCase(false)]
+    [TestCase(true)]
     public async Task DelayedInitialAckDoesNotQueueAFullWorldEveryTick(bool waitForRetry)
     {
         await using var pair = await StartConnectedPair(new() { Pool = false }, new() { Pool = false });
@@ -61,7 +131,7 @@ public sealed class InitialStateBacklogTest : RobustIntegrationTest
         // The client's network loop is paused, as during initial scene loading.
         var ticks = 10;
         if (waitForRetry)
-            await server.WaitPost(() => ticks += server.ResolveDependency<IGameTiming>().TickRate);
+            await server.WaitPost(() => ticks += 5 * server.ResolveDependency<IGameTiming>().TickRate);
         await server.WaitRunTicks(ticks);
         EntityUid added = default;
         NetEntity deletedNet = default;

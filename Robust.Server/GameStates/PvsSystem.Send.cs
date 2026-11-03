@@ -11,6 +11,11 @@ namespace Robust.Server.GameStates;
 
 internal sealed partial class PvsSystem
 {
+    // Bulk creation states can fill the reliable transport window several times.
+    // Ordinary reliable updates remain unpaced; only large snapshots wait for a real ACK.
+    private const int BulkStateThreshold = 64 * 1024;
+    private const uint SnapshotRetrySeconds = 5;
+
     /// <summary>
     /// Compress and send game states to connected clients.
     /// </summary>
@@ -35,7 +40,7 @@ internal sealed partial class PvsSystem
         using var stateStream = data.StateStream;
         data.StateStream = null;
 
-        // Initial-state pacing can intentionally skip serialization for this tick.
+        // Snapshot pacing can intentionally skip serialization for this tick.
         if (stateStream == null && data.Session.Channel is not DummyChannel)
             return;
 
@@ -58,8 +63,12 @@ internal sealed partial class PvsSystem
             // The channel can disconnect between our check and the network manager's check.
             if (msg.HasWritten && msg.ShouldSendReliably())
             {
-                if (data.FromTick == GameTick.Zero && data.LastReceivedAck == GameTick.Zero)
-                    data.InitialStateRetryTick = sendTick + (uint)_gameTiming.TickRate;
+                if (data.FromTick == GameTick.Zero || msg.MsgSize >= BulkStateThreshold)
+                {
+                    data.PendingSnapshotTick = sendTick;
+                    data.SnapshotRetryTick = sendTick + SnapshotRetrySeconds * _gameTiming.TickRate;
+                    Log.Debug($"Sending bulk PVS state to {data.Session}: {data.FromTick}->{sendTick}, {msg.MsgSize} bytes, ACK {data.LastReceivedAck}.");
+                }
 
                 data.RequestedFull = false;
                 // Reliable transport enqueueing is not a client state acknowledgement. In particular, a

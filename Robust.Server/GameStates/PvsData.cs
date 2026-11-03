@@ -106,11 +106,16 @@ internal sealed class PvsSession(ICommonSession session, ResizableMemoryRegion<P
     public GameTick LastReceivedAck;
 
     /// <summary>
-    /// Until the first real acknowledgement, retry an initial reliable snapshot
-    /// at most once per second instead of queueing the whole world every tick.
-    /// This is transport pacing, not an acknowledgement or a new delta baseline.
+    /// Latest initial or bulk reliable snapshot that is waiting for a real ACK.
+    /// Transport pacing must not change the acknowledgement or delta baseline.
     /// </summary>
-    public GameTick InitialStateRetryTick;
+    public GameTick PendingSnapshotTick;
+
+    /// <summary>
+    /// Earliest retry for an unacknowledged bulk snapshot. This also
+    /// covers large creation deltas after the lobby has already been acknowledged.
+    /// </summary>
+    public GameTick SnapshotRetryTick;
 
     /// <summary>
     /// Start tick for the time window of data that has to be sent to this player.
