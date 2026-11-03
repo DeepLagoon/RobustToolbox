@@ -106,6 +106,13 @@ internal sealed class PvsSession(ICommonSession session, ResizableMemoryRegion<P
     public GameTick LastReceivedAck;
 
     /// <summary>
+    /// Until the first real acknowledgement, retry an initial reliable snapshot
+    /// at most once per second instead of queueing the whole world every tick.
+    /// This is transport pacing, not an acknowledgement or a new delta baseline.
+    /// </summary>
+    public GameTick InitialStateRetryTick;
+
+    /// <summary>
     /// Start tick for the time window of data that has to be sent to this player.
     /// </summary>
     public GameTick FromTick;

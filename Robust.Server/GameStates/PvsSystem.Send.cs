@@ -35,6 +35,10 @@ internal sealed partial class PvsSystem
         using var stateStream = data.StateStream;
         data.StateStream = null;
 
+        // Initial-state pacing can intentionally skip serialization for this tick.
+        if (stateStream == null && data.Session.Channel is not DummyChannel)
+            return;
+
         // PVS benchmarks use dummy sessions.
         // ReSharper disable once ConditionIsAlwaysTrueOrFalseAccordingToNullableAPIContract
         if (data.Session.Channel is not DummyChannel)
@@ -54,6 +58,9 @@ internal sealed partial class PvsSystem
             // The channel can disconnect between our check and the network manager's check.
             if (msg.HasWritten && msg.ShouldSendReliably())
             {
+                if (data.FromTick == GameTick.Zero && data.LastReceivedAck == GameTick.Zero)
+                    data.InitialStateRetryTick = sendTick + (uint)_gameTiming.TickRate;
+
                 data.RequestedFull = false;
                 // Reliable transport enqueueing is not a client state acknowledgement. In particular, a
                 // delayed creation state must remain part of subsequent deltas until the client accepts it.

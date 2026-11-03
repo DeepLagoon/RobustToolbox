@@ -1,25 +1,29 @@
+using System;
+using System.Collections.Generic;
 using System.Linq;
 using System.Numerics;
+using System.Reflection;
 using System.Threading.Tasks;
 using NUnit.Framework;
-using Robust.Client.GameStates;
 using Robust.Shared;
 using Robust.Shared.GameObjects;
 using Robust.Shared.Map;
+using Robust.Shared.Network;
+using Robust.Shared.Network.Messages;
 
 namespace Robust.UnitTesting.Server.GameStates;
 
 public sealed class PvsReliableAckTest : RobustIntegrationTest
 {
-#if DEBUG
     [TestCase(1, 3)]
     [TestCase(40, 3)]
     [TestCase(40, 70)]
     public async Task UnreceivedCreationStateMustNotAcknowledgeNewEntities(int count, int outageTicks)
     {
-        await using var pair = await StartConnectedPair();
+        await using var pair = await StartConnectedPair(new() { Pool = false }, new() { Pool = false });
         var (client, server) = pair;
-        var states = (ClientGameStateManager)client.ResolveDependency<IClientGameStateManager>();
+        Dictionary<Type, ProcessMessage> callbacks = null!;
+        ProcessMessage original = null!;
         await RunTicksSync(server, client, 10);
         EntityUid map = default;
         EntityUid player = default;
@@ -37,7 +41,13 @@ public sealed class PvsReliableAckTest : RobustIntegrationTest
 
         // A newly visible room can produce a large, reliable creation state. Fault injection models a
         // state the client never accepts; transport send completion must not count as an entity ack.
-        await client.WaitPost(() => states.DropStates = true);
+        await client.WaitPost(() =>
+        {
+            var field = client.NetMan.GetType().GetField("_callbacks", BindingFlags.Instance | BindingFlags.NonPublic)!;
+            callbacks = (Dictionary<Type, ProcessMessage>) field.GetValue(client.NetMan)!;
+            original = callbacks[typeof(MsgState)];
+            callbacks[typeof(MsgState)] = _ => { };
+        });
         await server.WaitPost(() =>
         {
             var random = new System.Random(20610789);
@@ -51,7 +61,7 @@ public sealed class PvsReliableAckTest : RobustIntegrationTest
             }).ToArray();
         });
         await RunTicksSync(server, client, outageTicks);
-        await client.WaitPost(() => states.DropStates = false);
+        await client.WaitPost(() => callbacks[typeof(MsgState)] = original);
         await server.WaitPost(() =>
         {
             foreach (var uid in targets)
@@ -64,5 +74,4 @@ public sealed class PvsReliableAckTest : RobustIntegrationTest
                 Assert.That(client.EntMan.TryGetEntity(server.EntMan.GetNetEntity(uid), out _), Is.True);
         });
     }
-#endif
 }

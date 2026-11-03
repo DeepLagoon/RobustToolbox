@@ -59,6 +59,15 @@ internal sealed partial class PvsSystem
     /// </summary>
     private void SerializeSessionState(PvsSession data)
     {
+        if (data.LastReceivedAck == GameTick.Zero && _gameTiming.CurTick < data.InitialStateRetryTick)
+        {
+            // A deferred receiver must retain its unacknowledged deletion history.
+            InterlockedHelper.Min(ref _oldestAck, data.LastReceivedAck.Value);
+            data.ClearState();
+            data.LastSent = null;
+            return;
+        }
+
         var state = ComputeSessionState(data);
         InterlockedHelper.Min(ref _oldestAck, data.FromTick.Value);
         DebugTools.AssertEqual(data.StateStream, null);
