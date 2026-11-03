@@ -106,6 +106,12 @@ internal sealed class PvsSession(ICommonSession session, ResizableMemoryRegion<P
     public GameTick LastReceivedAck;
 
     /// <summary>
+    /// Tick of the previous state generated for this session. Deferred transport ticks do not
+    /// advance visibility history or make already visible entities consume the entry budget again.
+    /// </summary>
+    public GameTick LastSerializedTick;
+
+    /// <summary>
     /// Latest initial or bulk reliable snapshot that is waiting for a real ACK.
     /// Transport pacing must not change the acknowledgement or delta baseline.
     /// </summary>

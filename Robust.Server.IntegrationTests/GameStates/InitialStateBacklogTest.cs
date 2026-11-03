@@ -18,6 +18,57 @@ namespace Robust.UnitTesting.Server.GameStates;
 public sealed class InitialStateBacklogTest : RobustIntegrationTest
 {
     [Test]
+    public async Task PacedPvsStatesEventuallyDeliverMoreEntitiesThanEnterBudget()
+    {
+        await using var pair = await StartConnectedPair(new() { Pool = false }, new() { Pool = false });
+        var (client, server) = pair;
+        await RunTicksSync(server, client, 5);
+        EntityUid map = default;
+        await server.WaitPost(() =>
+        {
+            server.CfgMan.SetCVar(CVars.NetPVS, true);
+            map = server.System<SharedMapSystem>().CreateMap();
+            var player = server.EntMan.SpawnEntity(null, new EntityCoordinates(map, Vector2.Zero));
+            var session = server.PlayerMan.Sessions.Single();
+            server.PlayerMan.SetAttachedEntity(session, player);
+            server.PlayerMan.JoinGame(session);
+        });
+        await RunTicksSync(server, client, 10);
+        await client.WaitPost(() =>
+        {
+            client.CfgMan.SetCVar(CVars.NetPVSEntityBudget, 4);
+            client.CfgMan.SetCVar(CVars.NetPVSEntityEnterBudget, 4);
+        });
+        await RunTicksSync(server, client, 10);
+        INetChannel channel = null!;
+        FieldInfo blocked = null!;
+        NetEntity[] targets = [];
+        await server.WaitPost(() =>
+        {
+            channel = server.PlayerMan.Sessions.Single().Channel;
+            blocked = channel.GetType().GetField("SimulateSendBackpressure")!;
+            blocked.SetValue(channel, true);
+            targets = Enumerable.Range(0, 12).Select(_ => server.EntMan.GetNetEntity(
+                server.EntMan.SpawnEntity(null, new EntityCoordinates(map, Vector2.One)))).ToArray();
+        });
+        // Every delivered state is separated by deferred ticks. Previously, old visible
+        // entities consumed the entry budget on each retry and permanently hid the rest.
+        for (var i = 0; i < 16; i++)
+        {
+            await server.WaitPost(() => blocked.SetValue(channel, true));
+            await RunTicksSync(server, client, 2);
+            await server.WaitPost(() => blocked.SetValue(channel, false));
+            await RunTicksSync(server, client, 1);
+        }
+        await client.WaitAssertion(() =>
+        {
+            foreach (var target in targets)
+                Assert.That(client.EntMan.TryGetEntity(target, out _), Is.True,
+                    "Deferred ticks must not repeatedly exhaust the budget on already visible entities.");
+        });
+    }
+
+    [Test]
     public async Task CongestedTransportDefersOrdinaryStatesWithoutLosingCreationOrDeletion()
     {
         await using var pair = await StartConnectedPair(new() { Pool = false }, new() { Pool = false });

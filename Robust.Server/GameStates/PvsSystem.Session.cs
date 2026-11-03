@@ -61,6 +61,8 @@ internal sealed partial class PvsSystem
         session.ForceSendReliably = session.RequestedFull
                                           || _gameTiming.CurTick > session.LastReceivedAck + (uint) ForceAckThreshold;
 
+        session.LastSerializedTick = _gameTiming.CurTick;
+
         return state;
     }
 
@@ -164,5 +166,6 @@ internal sealed partial class PvsSystem
 
         session.PreviouslySent.Clear();
         session.LastSent = null;
+        session.LastSerializedTick = GameTick.Zero;
     }
 }

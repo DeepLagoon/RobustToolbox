@@ -83,7 +83,7 @@ internal sealed partial class PvsSystem
             return;
         }
 
-        var (entered,budgetExceeded) = IsEnteringPvsRange(ref data, fromTick, ref session.Budget);
+        var (entered,budgetExceeded) = IsEnteringPvsRange(ref data, fromTick, session.LastSerializedTick, ref session.Budget);
 
         if (budgetExceeded)
             return;
@@ -128,7 +128,7 @@ internal sealed partial class PvsSystem
         if (data.LastSeen == _gameTiming.CurTick)
             return true;
 
-        var (entered,budgetExceeded) = IsEnteringPvsRange(ref data, fromTick, ref session.Budget);
+        var (entered,budgetExceeded) = IsEnteringPvsRange(ref data, fromTick, session.LastSerializedTick, ref session.Budget);
 
         if (budgetExceeded)
             return false;
@@ -205,11 +205,12 @@ internal sealed partial class PvsSystem
     private (bool Entering, bool BudgetExceeded) IsEnteringPvsRange(
         ref PvsData data,
         GameTick fromTick,
+        GameTick previousStateTick,
         ref PvsBudget budget)
     {
         var enteredSinceLastSent = fromTick == GameTick.Zero
                                    || data.LastSeen == GameTick.Zero
-                                   || data.LastSeen != _gameTiming.CurTick - 1;
+                                   || data.LastSeen != previousStateTick;
 
         var entering = enteredSinceLastSent
                       || data.EntityLastAcked == GameTick.Zero
