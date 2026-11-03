@@ -17,6 +17,64 @@ namespace Robust.UnitTesting.Server.GameStates;
 
 public sealed class InitialStateBacklogTest : RobustIntegrationTest
 {
+    [Test]
+    public async Task CongestedTransportDefersOrdinaryStatesWithoutLosingCreationOrDeletion()
+    {
+        await using var pair = await StartConnectedPair(new() { Pool = false }, new() { Pool = false });
+        var (client, server) = pair;
+        await RunTicksSync(server, client, 5);
+        EntityUid map = default;
+        EntityUid deleted = default;
+        NetEntity deletedNet = default;
+        await server.WaitPost(() =>
+        {
+            server.CfgMan.SetCVar(CVars.NetPVS, false);
+            map = server.System<SharedMapSystem>().CreateMap();
+            deleted = server.EntMan.SpawnEntity(null, new EntityCoordinates(map, Vector2.Zero));
+            deletedNet = server.EntMan.GetNetEntity(deleted);
+            server.PlayerMan.JoinGame(server.PlayerMan.Sessions.Single());
+        });
+        await RunTicksSync(server, client, 10);
+        await server.WaitRunTicks(1);
+        var received = new List<GameTick>();
+        await client.WaitPost(() =>
+        {
+            var field = client.NetMan.GetType().GetField("_callbacks", BindingFlags.Instance | BindingFlags.NonPublic)!;
+            var callbacks = (Dictionary<Type, ProcessMessage>) field.GetValue(client.NetMan)!;
+            var original = callbacks[typeof(MsgState)];
+            callbacks[typeof(MsgState)] = message =>
+            {
+                received.Add(((MsgState) message).State.ToSequence);
+                original(message);
+            };
+        });
+        INetChannel channel = null!;
+        FieldInfo blockedField = null!;
+        GameTick blockedSince = default;
+        EntityUid added = default;
+        await server.WaitPost(() =>
+        {
+            channel = server.PlayerMan.Sessions.Single().Channel;
+            blockedField = channel.GetType().GetField("SimulateSendBackpressure")!;
+            blockedField.SetValue(channel, true);
+            blockedSince = server.Timing.CurTick;
+            added = server.EntMan.SpawnEntity(null, new EntityCoordinates(map, Vector2.One));
+            server.EntMan.DeleteEntity(deleted);
+        });
+        await server.WaitRunTicks(10);
+        await client.WaitRunTicks(1);
+        await client.WaitAssertion(() =>
+            Assert.That(received.Count(tick => tick >= blockedSince), Is.Zero,
+                "An occupied reliable transport window must not accumulate ordinary state snapshots"));
+        await server.WaitPost(() => blockedField.SetValue(channel, false));
+        await RunTicksSync(server, client, 10);
+        await client.WaitAssertion(() =>
+        {
+            Assert.That(client.EntMan.TryGetEntity(server.EntMan.GetNetEntity(added), out _), Is.True);
+            Assert.That(client.EntMan.TryGetEntity(deletedNet, out var uid) && client.EntMan.EntityExists(uid), Is.False);
+        });
+    }
+
     [TestCase(false)]
     [TestCase(true)]
     public async Task CreationBurstAfterLobbyAckOnlyPacesBulkSnapshots(bool bulk)

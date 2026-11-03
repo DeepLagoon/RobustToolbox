@@ -60,9 +60,13 @@ internal sealed partial class PvsSystem
     /// </summary>
     private void SerializeSessionState(PvsSession data)
     {
-        if (data.LastReceivedAck < data.PendingSnapshotTick
-            && (_gameTiming.CurTick < data.SnapshotRetryTick
-                || !data.Channel.CanSendImmediately(NetDeliveryMethod.ReliableUnordered, 0)))
+        // Medium reliable states can also outrun the 64-fragment transport window
+        // at high RTT. Build a fresh state when capacity returns instead of queueing
+        // a growing replay of obsolete movement. Keep the real ACK as the baseline.
+        var transportBlocked = data.Channel is not DummyChannel
+                               && !data.Channel.CanSendImmediately(NetDeliveryMethod.ReliableUnordered, 0);
+        if (transportBlocked || (data.LastReceivedAck < data.PendingSnapshotTick
+                                 && _gameTiming.CurTick < data.SnapshotRetryTick))
         {
             // A deferred receiver must retain its unacknowledged deletion history.
             InterlockedHelper.Min(ref _oldestAck, data.LastReceivedAck.Value);

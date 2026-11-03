@@ -13,6 +13,79 @@ public sealed class SendBackpressureTests
 {
     private static readonly IPEndPoint Target = new(IPAddress.Loopback, 1213);
 
+    [TestCase(50)]
+    [TestCase(100)]
+    [TestCase(150)]
+    [TestCase(250)]
+    public void ReliableProducerCoalescingBoundsBacklogAtHighRoundTripTimes(int milliseconds)
+    {
+        var unpaced = RunProducer(milliseconds, false);
+        var paced = RunProducer(milliseconds, true);
+        TestContext.Out.WriteLine($"RTT={milliseconds}ms; unpaced max queued fragments={unpaced}; paced={paced}");
+        Assert.That(paced, Is.LessThanOrEqualTo(30), "At most one newly prepared snapshot may exceed the free window");
+        if (milliseconds >= 100)
+            Assert.That(unpaced, Is.GreaterThan(1000), "The workload must reproduce a growing reliable backlog");
+    }
+
+    private static int RunProducer(int milliseconds, bool pace)
+    {
+        var peer = new NetPeer(new NetPeerConfiguration("rtt-state-producer")
+        {
+            EnableSendBackpressure = true,
+            ReliableSendWindowBytes = 131072,
+            MaximumTransmissionUnit = 700,
+            // No socket or network thread: drive real sender windows and timed ACKs below.
+            // Suppress actual datagram transmission while retaining sender bookkeeping.
+            SimulatedLoss = 1,
+        });
+        typeof(NetPeer).GetField("m_networkThread", BindingFlags.Instance | BindingFlags.NonPublic)!
+            .SetValue(peer, Thread.CurrentThread);
+        var connection = new NetConnection(peer, Target);
+        var rtt = milliseconds / 1000.0;
+        typeof(NetConnection).GetField("m_averageRoundtripTime", BindingFlags.Instance | BindingFlags.NonPublic)!
+            .SetValue(connection, rtt);
+        var channel = new NetReliableSenderChannel(connection, NetUtility.GetWindowSize(NetDeliveryMethod.ReliableUnordered));
+        connection.m_sendChannels[(int) NetDeliveryMethod.ReliableUnordered - 1] = channel;
+        var windowStart = typeof(NetReliableSenderChannel).GetField("m_windowStart", BindingFlags.Instance | BindingFlags.NonPublic)!;
+        var payload = new byte[680];
+        var nextFrame = 0;
+        var maximumQueued = 0;
+        for (var elapsed = 0; elapsed < 20000; elapsed++)
+        {
+            var now = 1 + elapsed / 1000.0;
+            var start = (int) windowStart.GetValue(channel)!;
+            for (var i = 0; i < channel.WindowSize; i++)
+            {
+                var sequence = (start + i) % 1024;
+                var stored = channel.m_storedMessages[sequence % channel.WindowSize];
+                if (stored.Message == null || stored.SequenceNumber != sequence || now < stored.LastSent + rtt)
+                    break;
+                channel.ReceiveAcknowledge(now, sequence);
+            }
+            if (elapsed * 30 >= nextFrame * 1000)
+            {
+                nextFrame++;
+                // One roughly 20 KiB compressed world update at 30 server ticks/sec.
+                // A skipped producer tick is replaced by a fresh snapshot after capacity returns.
+                if (!pace || connection.CanSendImmediately(NetDeliveryMethod.ReliableUnordered, 0))
+                {
+                    for (var fragment = 0; fragment < 30; fragment++)
+                    {
+                        var message = peer.CreateMessage();
+                        message.Write(payload);
+                        message.m_messageType = NetMessageType.UserReliableUnordered;
+                        message.m_recyclingCount = 1;
+                        channel.Enqueue(message);
+                    }
+                }
+            }
+            channel.SendQueuedMessages(now);
+            maximumQueued = Math.Max(maximumQueued, channel.QueuedSendsCount);
+        }
+        channel.Reset();
+        return maximumQueued;
+    }
+
     [Test]
     public void ChannelsShareWindowAndOnlyAcknowledgementOrResetReleasesReservation()
     {

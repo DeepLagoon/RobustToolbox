@@ -445,6 +445,7 @@ namespace Robust.UnitTesting
                 long INetChannel.ConnectionId => ConnectionUid;
 
                 public bool IsConnected { get; set; }
+                public bool SimulateSendBackpressure = false;
                 public NetUserData UserData { get; }
                 // integration tests don't simulate serializer handshake so this is always true.
                 public bool IsHandshakeComplete => true;
@@ -499,7 +500,7 @@ namespace Robust.UnitTesting
 
                 public bool CanSendImmediately(NetDeliveryMethod method, int sequenceChannel)
                 {
-                    return true;
+                    return !SimulateSendBackpressure;
                 }
             }
 
