@@ -23,6 +23,7 @@ namespace Robust.Server.ViewVariables
         public uint SessionId { get; }
         public Type ObjectType { get; }
         public Action<object>? ObjectChangeDelegate { get; }
+        public EntityUid? OwnerEntity { get; }
 
         /// <param name="playerUser">The session ID of the player who opened this session.</param>
         /// <param name="o">The object we represent.</param>
@@ -31,13 +32,14 @@ namespace Robust.Server.ViewVariables
         /// </param>
         /// <param name="host">The view variables host owning this session.</param>
         public ViewVariablesSession(NetUserId playerUser, object o, Action<object>? objectChangeDelegate, uint sessionId, IServerViewVariablesInternal host,
-            IRobustSerializer robustSerializer, IEntityManager entMan, ISawmill logger)
+            IRobustSerializer robustSerializer, IEntityManager entMan, ISawmill logger, EntityUid? ownerEntity = null)
         {
             PlayerUser = playerUser;
             Object = o;
             SessionId = sessionId;
             ObjectType = o.GetType();
             ObjectChangeDelegate = objectChangeDelegate;
+            OwnerEntity = (o as Component)?.Owner ?? ownerEntity;
             Host = host;
             RobustSerializer = robustSerializer;
             EntityManager = entMan;
@@ -90,18 +92,26 @@ namespace Robust.Server.ViewVariables
 
         public void Modify(object[] propertyIndex, object value)
         {
+            var modified = false;
             foreach (var trait in _traits)
             {
                 if (trait.TryModifyProperty(propertyIndex, value))
                 {
+                    modified = true;
                     break;
                 }
             }
+
+            if (!modified)
+                return;
 
             // Auto-dirty component. Only works when modifying a field that is directly on a component,
             // Does not work for nested objects.
             if (Object is Component { NetSyncEnabled: true } comp)
                 EntityManager.Dirty(comp.Owner, comp);
+
+            if (OwnerEntity is { } owner)
+                EntityManager.EventBus.RaiseEvent(EventSource.Local, new ViewVariablesModifiedEvent(owner, PlayerUser));
         }
 
         public bool TryGetRelativeObject(object[] propertyIndex, out object? value)

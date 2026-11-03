@@ -29,6 +29,8 @@ namespace Robust.Server.Console
 
         public override event ConAnyCommandCallback? AnyCommandExecuted;
 
+        public ICommonSession? ExecutingSession { get; private set; }
+
         /// <inheritdoc />
         public override void ExecuteCommand(ICommonSession? session, string command)
         {
@@ -101,6 +103,8 @@ namespace Robust.Server.Console
 
         private void ExecuteInShell(IConsoleShell shell, string command)
         {
+            var previousSession = ExecutingSession;
+            ExecutingSession = shell is SudoShell sudo ? sudo.Invoker : shell.Player;
             try
             {
                 var args = new List<string>();
@@ -151,6 +155,10 @@ namespace Robust.Server.Console
                 LogManager.GetSawmill(SawmillName)
                     .Error($"{FormatPlayerString(shell.Player)}: ExecuteError - {command}:\n{e}");
                 shell.WriteError($"There was an error while executing the command: {e}");
+            }
+            finally
+            {
+                ExecutingSession = previousSession;
             }
         }
 
@@ -314,6 +322,7 @@ namespace Robust.Server.Console
             }
 
             public IConsoleHost ConsoleHost => _host;
+            public ICommonSession? Invoker => _sudoer is SudoShell sudo ? sudo.Invoker : _sudoer.Player;
             public bool IsServer => _owner.IsServer;
             public ICommonSession? Player => _owner.Player;
             public bool IsLocal => _owner.IsLocal;

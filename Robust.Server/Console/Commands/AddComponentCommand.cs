@@ -2,6 +2,7 @@
 using Robust.Shared.Console;
 using Robust.Shared.GameObjects;
 using Robust.Shared.IoC;
+using Robust.Server.ViewVariables;
 
 namespace Robust.Server.Console.Commands
 {
@@ -44,10 +45,14 @@ namespace Robust.Server.Console.Commands
             if (_entityManager.HasComponent(uid, registration.Type))
             {
                 shell.WriteLine($"Entity {_entityManager.GetComponent<MetaDataComponent>(uid.Value).EntityName} already has a {componentName} component.");
+                return;
             }
 
             var component = _componentFactory.GetComponent(registration.Type);
             _entityManager.AddComponent(uid.Value, component);
+
+            if (((IServerConsoleHost) shell.ConsoleHost).ExecutingSession is { } player)
+                _entityManager.EventBus.RaiseEvent(EventSource.Local, new ViewVariablesModifiedEvent(uid.Value, player.UserId));
 
             shell.WriteLine($"Added {componentName} component to entity {_entityManager.GetComponent<MetaDataComponent>(uid.Value).EntityName}.");
         }

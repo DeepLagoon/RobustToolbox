@@ -3,6 +3,7 @@ using JetBrains.Annotations;
 using Robust.Shared.Console;
 using Robust.Shared.GameObjects;
 using Robust.Shared.IoC;
+using Robust.Server.ViewVariables;
 
 namespace Robust.Server.Console.Commands
 {
@@ -51,6 +52,9 @@ namespace Robust.Server.Console.Commands
             }
 
             _entityManager.RemoveComponent(uid, registration.Type);
+
+            if (((IServerConsoleHost) shell.ConsoleHost).ExecutingSession is { } player)
+                _entityManager.EventBus.RaiseEvent(EventSource.Local, new ViewVariablesModifiedEvent(uid, player.UserId));
 
             shell.WriteLine($"Removed {componentName} component from entity {_entityManager.GetComponent<MetaDataComponent>(uid).EntityName}.");
         }

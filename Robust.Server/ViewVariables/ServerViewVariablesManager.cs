@@ -85,6 +85,9 @@ namespace Robust.Server.ViewVariables
                 return;
             }
 
+            if (!_groupController.CanCommand(_playerManager.GetSessionByChannel(message.MsgChannel), "vv"))
+                return;
+
             try
             {
                 var value = message.Value;
@@ -137,6 +140,7 @@ namespace Robust.Server.ViewVariables
             }
 
             object theObject;
+            EntityUid? ownerEntity = null;
             Action<object>? objectChangeDelegate = null;
 
             switch (message.Selector)
@@ -167,6 +171,7 @@ namespace Robust.Server.ViewVariables
                     }
 
                     theObject = entitySelector.Entity;
+                    ownerEntity = entity;
                     break;
                 }
                 case ViewVariablesSessionRelativeSelector sessionRelativeSelector:
@@ -207,6 +212,7 @@ namespace Robust.Server.ViewVariables
                     }
 
                     theObject = value;
+                    ownerEntity = relSession.OwnerEntity;
                     objectChangeDelegate = obj => relSession.Modify(sessionRelativeSelector.PropertyIndex, obj);
                     break;
                 }
@@ -236,13 +242,15 @@ namespace Robust.Server.ViewVariables
                 }
                 case ViewVariablesPathSelector paSelector:
                 {
-                    if (ResolvePath(paSelector.Path)?.Get() is not {} obj)
+                    var path = ResolvePath(paSelector.Path);
+                    if (path?.Get() is not {} obj)
                     {
                         Deny(ViewVariablesResponseCode.NoObject);
                         return;
                     }
 
                     theObject = obj;
+                    ownerEntity = path.ParentComponent?.Owner;
                     break;
                 }
                 default:
@@ -252,7 +260,7 @@ namespace Robust.Server.ViewVariables
 
             var sessionId = _nextSessionId++;
             var session = new ViewVariablesSession(message.MsgChannel.UserId, theObject, objectChangeDelegate, sessionId, this,
-                _robustSerializer, _entityManager, Sawmill);
+                _robustSerializer, _entityManager, Sawmill, ownerEntity);
 
             _sessions.Add(sessionId, session);
             _users.GetOrNew(session.PlayerUser).Add(sessionId);
