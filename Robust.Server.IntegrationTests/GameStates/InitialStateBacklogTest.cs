@@ -17,6 +17,87 @@ namespace Robust.UnitTesting.Server.GameStates;
 
 public sealed class InitialStateBacklogTest : RobustIntegrationTest
 {
+    [Test, CancelAfter(600_000)]
+    public async Task PacedPvsStatesKeepDeliveringNewEntitiesForAnHour()
+    {
+        await using var pair = await StartConnectedPair(new() { Pool = false }, new() { Pool = false });
+        var (client, server) = pair;
+        await RunTicksSync(server, client, 5);
+        EntityUid map = default;
+        await server.WaitPost(() =>
+        {
+            server.CfgMan.SetCVar(CVars.NetPVS, true);
+            map = server.System<SharedMapSystem>().CreateMap();
+            var player = server.EntMan.SpawnEntity(null, new EntityCoordinates(map, Vector2.Zero));
+            var session = server.PlayerMan.Sessions.Single();
+            server.PlayerMan.SetAttachedEntity(session, player);
+            server.PlayerMan.JoinGame(session);
+        });
+        await RunTicksSync(server, client, 10);
+        await client.WaitPost(() =>
+        {
+            client.CfgMan.SetCVar(CVars.NetPVSEntityBudget, 4);
+            client.CfgMan.SetCVar(CVars.NetPVSEntityEnterBudget, 4);
+        });
+        await RunTicksSync(server, client, 10);
+
+        INetChannel channel = null!;
+        FieldInfo blocked = null!;
+        GameTick started = default;
+        var deferredTicks = 0;
+        await server.WaitPost(() =>
+        {
+            channel = server.PlayerMan.Sessions.Single().Channel;
+            blocked = channel.GetType().GetField("SimulateSendBackpressure")!;
+            started = server.Timing.CurTick;
+            deferredTicks = (int) Math.Ceiling(server.Timing.TickRate * 65 * 60 / 400.0);
+        });
+        EntityUid[] current = [];
+        NetEntity[] targets = [];
+        var retired = new List<NetEntity>();
+        // Advance real simulation ticks, not just the clock, across 65 simulated minutes.
+        // Each recovery must deliver new objects and deletions with the ordinary tiny budget.
+        for (var cycle = 0; cycle < 400; cycle++)
+        {
+            if (cycle % 40 == 0)
+            {
+                await server.WaitPost(() =>
+                {
+                    retired.AddRange(targets);
+                    foreach (var uid in current)
+                        server.EntMan.DeleteEntity(uid);
+                    current = Enumerable.Range(0, 12).Select(_ => server.EntMan.SpawnEntity(
+                        null, new EntityCoordinates(map, Vector2.One))).ToArray();
+                    targets = current.Select(uid => server.EntMan.GetNetEntity(uid)).ToArray();
+                });
+            }
+            await server.WaitPost(() => blocked.SetValue(channel, true));
+            await server.WaitRunTicks(deferredTicks);
+            await client.WaitRunTicks(deferredTicks);
+            GameTick recoveryTick = default;
+            await server.WaitPost(() =>
+            {
+                recoveryTick = server.Timing.CurTick;
+                blocked.SetValue(channel, false);
+            });
+            await RunTicksSync(server, client, 8);
+            await client.WaitAssertion(() =>
+            {
+                foreach (var target in targets)
+                    Assert.That(client.EntMan.TryGetEntity(target, out _), Is.True,
+                        $"New entities must still arrive after congestion cycle {cycle}.");
+                foreach (var target in retired)
+                    Assert.That(client.EntMan.TryGetEntity(target, out var uid) && client.EntMan.EntityExists(uid), Is.False,
+                        $"Deletion history must survive congestion cycle {cycle}.");
+            });
+            await server.WaitAssertion(() =>
+                Assert.That(server.System<PvsSystem>().PlayerData[server.PlayerMan.Sessions.Single()].LastReceivedAck,
+                    Is.GreaterThanOrEqualTo(recoveryTick), "Recovery must acknowledge a fresh state, without a growing backlog."));
+        }
+        await server.WaitAssertion(() =>
+            Assert.That(server.Timing.CurTick.Value - started.Value, Is.GreaterThanOrEqualTo(server.Timing.TickRate * 65 * 60)));
+    }
+
     [Test]
     public async Task PacedPvsStatesEventuallyDeliverMoreEntitiesThanEnterBudget()
     {
