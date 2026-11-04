@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Diagnostics.CodeAnalysis;
 using JetBrains.Annotations;
 using Prometheus;
 using Robust.Server.GameStates;
@@ -217,6 +218,10 @@ namespace Robust.Server.GameObjects
 
         private void HandleEntityNetworkMessage(MsgEntity message)
         {
+            // The transport is connected before the player session is ready to send entity messages.
+            if (!TryGetEntityMessageSession(message.MsgChannel, out _, out _))
+                return;
+
             if (_logLateMsgs)
             {
                 var msgT = message.SourceTick;
@@ -239,21 +244,12 @@ namespace Robust.Server.GameObjects
 
         private void DispatchEntityNetworkMessage(MsgEntity message)
         {
-            // Don't try to retrieve the session if the client disconnected
-            if (!message.MsgChannel.IsConnected)
-            {
+            // A queued message can outlive the session or channel that sent it.
+            if (!TryGetEntityMessageSession(message.MsgChannel, out var player, out var lastSequence))
                 return;
-            }
 
-            var player = _playerManager.GetSessionByChannel(message.MsgChannel);
-
-            if (message.Sequence != 0)
-            {
-                if (_lastProcessedSequencesCmd[player] < message.Sequence)
-                {
-                    _lastProcessedSequencesCmd[player] = message.Sequence;
-                }
-            }
+            if (message.Sequence > lastSequence)
+                _lastProcessedSequencesCmd[player] = message.Sequence;
 
 #if EXCEPTION_TOLERANCE
             try
@@ -277,6 +273,19 @@ namespace Robust.Server.GameObjects
                 _runtimeLog.LogException(e, $"{nameof(DispatchEntityNetworkMessage)}({message.Type})");
             }
 #endif
+        }
+
+        private bool TryGetEntityMessageSession(
+            INetChannel channel,
+            [NotNullWhen(true)] out ICommonSession? player,
+            out uint lastSequence)
+        {
+            player = null;
+            lastSequence = 0;
+            return channel.IsConnected
+                && _playerManager.TryGetSessionByChannel(channel, out player)
+                && ReferenceEquals(player.Channel, channel)
+                && _lastProcessedSequencesCmd.TryGetValue(player, out lastSequence);
         }
 
         private void OnPlayerStatusChanged(object? sender, SessionStatusEventArgs args)
