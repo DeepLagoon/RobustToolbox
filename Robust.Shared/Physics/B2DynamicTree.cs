@@ -887,6 +887,32 @@ namespace Robust.Shared.Physics
             InsertLeaf(proxy, shouldRotate);
         }
 
+        /// <summary>
+        /// Updates a leaf in place if its new bounds fit in the same branch. Parent bounds stay tight.
+        /// </summary>
+        internal bool TryRefitProxy(Proxy proxy, in Box2 aabb)
+        {
+            ref var leaf = ref _nodes[proxy];
+            Assert(leaf.IsLeaf && aabb.IsValid());
+            var parentIndex = leaf.Parent;
+            if (parentIndex != Proxy.Free && !_nodes[parentIndex].Aabb.Contains(aabb))
+                return false;
+
+            leaf.Aabb = aabb;
+            while (parentIndex != Proxy.Free)
+            {
+                ref var parent = ref _nodes[parentIndex];
+                var bounds = _nodes[parent.Child1].Aabb.Union(_nodes[parent.Child2].Aabb);
+                if (bounds.Equals(parent.Aabb))
+                    break;
+
+                parent.Aabb = bounds;
+                parentIndex = parent.Parent;
+            }
+
+            return true;
+        }
+
         public void EnlargeProxy(Proxy proxy, Box2 aabb)
         {
             var nodes = _nodes;
@@ -977,7 +1003,8 @@ namespace Robust.Shared.Physics
                 nodes[sibling].Parent = grandParent;
                 FreeNode(parent);
 
-                // Adjust ancestor bounds.
+                // Enlarged branches may have loose ancestor bounds that still need tightening.
+                var tightBounds = !nodes[_root].Enlarged;
                 var index = grandParent;
                 while (index != Proxy.Free)
                 {
@@ -985,17 +1012,15 @@ namespace Robust.Shared.Physics
                     ref var child1 = ref nodes[node.Child1];
                     ref var child2 = ref nodes[node.Child2];
 
-                    // Fast union using SSE
-                    //__m128 aabb1 = _mm_load_ps(&child1->aabb.lowerBound.x);
-                    //__m128 aabb2 = _mm_load_ps(&child2->aabb.lowerBound.x);
-                    //__m128 lower = _mm_min_ps(aabb1, aabb2);
-                    //__m128 upper = _mm_max_ps(aabb1, aabb2);
-                    //__m128 aabb = _mm_shuffle_ps(lower, upper, _MM_SHUFFLE(3, 2, 1, 0));
-                    //_mm_store_ps(&node->aabb.lowerBound.x, aabb);
+                    var bounds = child1.Aabb.Union(child2.Aabb);
+                    var categoryBits = child1.CategoryBits | child2.CategoryBits;
+                    var height = (short)(1 + Math.Max(child1.Height, child2.Height));
+                    if (tightBounds && node.Height == height && node.CategoryBits == categoryBits && node.Aabb.Equals(bounds))
+                        break;
 
-                    node.Aabb = child1.Aabb.Union(child2.Aabb);
-                    node.CategoryBits = child1.CategoryBits | child2.CategoryBits;
-                    node.Height = (short)(1 + Math.Max(child1.Height, child2.Height));
+                    node.Aabb = bounds;
+                    node.CategoryBits = categoryBits;
+                    node.Height = height;
 
                     index = node.Parent;
                 }
@@ -1029,9 +1054,7 @@ namespace Robust.Shared.Physics
 	        var nodes = _nodes;
 	        node.Parent = oldParent;
             node.UserData = default!;
-            node.Aabb = leafAABB.Union(nodes[sibling].Aabb);
-            node.CategoryBits = nodes[leaf].CategoryBits | nodes[sibling].CategoryBits;
-            node.Height = (short)(nodes[sibling].Height + 1);
+            var canStop = !shouldRotate && !nodes[_root].Enlarged;
 
 	        if (oldParent != Proxy.Free)
 	        {
@@ -1075,10 +1098,21 @@ namespace Robust.Shared.Physics
 		        Assert(child1 != Proxy.Free);
 		        Assert(child2 != Proxy.Free);
 
-                indexNode.Aabb = childNode1.Aabb.Union(childNode2.Aabb);
-                indexNode.CategoryBits = childNode1.CategoryBits | childNode2.CategoryBits;
-                indexNode.Height = (short)(1 + Math.Max(childNode1.Height, childNode2.Height));
-                indexNode.Enlarged = childNode1.Enlarged || childNode2.Enlarged;
+                var bounds = childNode1.Aabb.Union(childNode2.Aabb);
+                var categoryBits = childNode1.CategoryBits | childNode2.CategoryBits;
+                var height = (short)(1 + Math.Max(childNode1.Height, childNode2.Height));
+                var enlarged = childNode1.Enlarged || childNode2.Enlarged;
+
+                // Always propagate through the new parent. Beyond it, unchanged child data
+                // cannot change the next ancestor in a tight tree with no rotations.
+                if (canStop && index != newParent && indexNode.Height == height &&
+                    indexNode.CategoryBits == categoryBits && indexNode.Enlarged == enlarged && indexNode.Aabb.Equals(bounds))
+                    break;
+
+                indexNode.Aabb = bounds;
+                indexNode.CategoryBits = categoryBits;
+                indexNode.Height = height;
+                indexNode.Enlarged = enlarged;
 
 		        if (shouldRotate)
 		        {

@@ -29,6 +29,49 @@ public abstract partial class SharedMapSystem
 
     #region TryFindGridAt
 
+    private const float GridPointSearchMargin = 0.2f;
+    private ulong _traversalRevision;
+
+    // A grid-local move only needs a tile lookup if no other grid can be found by
+    // the full point query. Grid tree changes invalidate the isolation result.
+    internal bool CanStayOnGrid(EntityUid map, EntityUid uid, Vector2 mapPosition)
+    {
+        if (!_gridTreeQuery.TryGetComponent(map, out var tree) ||
+            !_gridQuery.TryGetComponent(uid, out var grid) || grid.MapProxy == DynamicTree.Proxy.Free ||
+            tree.Tree.GetFatAabb(grid.MapProxy) is not { } bounds)
+            return false;
+
+        if (grid.TraversalRevision != tree.TraversalRevision)
+        {
+            var state = (Tree: tree.Tree, Owner: uid, Isolated: true);
+            tree.Tree.Query(ref state, static (ref (B2DynamicTree<(EntityUid Uid, FixturesComponent Fixtures, MapGridComponent Grid)> Tree,
+                EntityUid Owner, bool Isolated) state, DynamicTree.Proxy proxy) =>
+            {
+                if (state.Tree.GetUserData(proxy).Uid == state.Owner)
+                    return true;
+
+                state.Isolated = false;
+                return false;
+            }, bounds.Enlarged(GridPointSearchMargin));
+            grid.TraversalRevision = tree.TraversalRevision;
+            grid.TraversalIsolated = state.Isolated;
+        }
+
+        // Restrict the shortcut to points within the indexed bounds. Tile removal
+        // inside unchanged bounds is still observed on every move.
+        if (!grid.TraversalIsolated || !bounds.Contains(mapPosition))
+            return false;
+
+        return HasGridTileAt(grid, Vector2.Transform(mapPosition, _transform.GetInvWorldMatrix(uid)));
+    }
+
+    private static bool HasGridTileAt(MapGridComponent grid, Vector2 localPosition)
+    {
+        var indices = GetChunkIndices(localPosition, grid.ChunkSize);
+        return grid.Chunks.TryGetValue(indices, out var chunk)
+               && !chunk.GetTile(GetChunkRelative(localPosition, grid.ChunkSize)).IsEmpty;
+    }
+
     /// <summary>
     /// Attempts to find a grid which overlaps with a given position on a given map.
     /// If the map is itself a grid and there is no other grid overlapping with the given position this will return the map itself as such a grid.
@@ -40,7 +83,7 @@ public abstract partial class SharedMapSystem
     /// <returns>True if a grid overlapping with the given position within the given map was found, or false otherwise.</returns>
     public bool TryFindGridAt(EntityUid mapEnt, Vector2 worldPos, out EntityUid uid, [NotNullWhen(true)] out MapGridComponent? grid)
     {
-        var rangeVec = new Vector2(0.2f, 0.2f);
+        var rangeVec = new Vector2(GridPointSearchMargin);
 
         // Need to enlarge the AABB by at least the grid shrinkage size.
         var aabb = new Box2(worldPos - rangeVec, worldPos + rangeVec);
@@ -67,15 +110,7 @@ public abstract partial class SharedMapSystem
             // NOTE:
             // If you change this to use fixtures instead (i.e. if you want half-tiles) then you need to make sure
             // you account for the fact that fixtures are shrunk slightly!
-            var chunkIndices = GetChunkIndices(localPos, iGrid.ChunkSize);
-
-            if (!iGrid.Chunks.TryGetValue(chunkIndices, out var chunk))
-                return true;
-
-            var chunkRelative = GetChunkRelative(localPos, iGrid.ChunkSize);
-            var chunkTile = chunk.GetTile(chunkRelative);
-
-            if (chunkTile.IsEmpty)
+            if (!HasGridTileAt(iGrid, localPos))
                 return true;
 
             tuple.uid = iUid;

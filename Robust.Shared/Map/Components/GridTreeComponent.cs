@@ -8,6 +8,8 @@ namespace Robust.Shared.Map.Components;
 [RegisterComponent, NetworkedComponent]
 public sealed partial class GridTreeComponent : Component
 {
+    internal ulong TraversalRevision;
+
     [ViewVariables]
     public readonly B2DynamicTree<(EntityUid Uid, FixturesComponent Fixtures, MapGridComponent Grid)> Tree = new();
 }

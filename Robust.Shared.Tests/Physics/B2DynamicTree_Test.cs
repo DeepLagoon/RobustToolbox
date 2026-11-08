@@ -33,6 +33,74 @@ namespace Robust.Shared.Tests.Physics
         };
 
         [Test]
+        public void RefitProxyKeepsExactLeafBounds()
+        {
+            var tree = new B2DynamicTree<int>();
+            tree.CreateProxy(new Box2(-2, -2, 2, 2), uint.MaxValue, 0);
+            var leaf = tree.CreateProxy(new Box2(-1, -1, 0, 0), uint.MaxValue, 1);
+            Assert.That(tree.TryRefitProxy(leaf, new Box2(0, 0, 1, 1)), Is.True);
+
+            var found = new List<int>();
+            void Query(Vector2 point)
+            {
+                found.Clear();
+                tree.Query(proxy =>
+                {
+                    found.Add(tree.GetUserData(proxy));
+                    return true;
+                }, Box2.CenteredAround(point, new Vector2(0.1f)));
+            }
+
+            Query(new Vector2(-0.5f));
+            Assert.That(found, Is.EqualTo(new[] { 0 }));
+            Query(new Vector2(0.5f));
+            Assert.That(found, Is.EquivalentTo(new[] { 0, 1 }));
+            Assert.That(tree.TryRefitProxy(leaf, new Box2(10, 10, 11, 11)), Is.False);
+            tree.Rebuild(true);
+            Query(new Vector2(0.5f));
+            Assert.That(found, Is.EquivalentTo(new[] { 0, 1 }));
+        }
+
+        [Test]
+        public void MoveProxyPreservesBoundsAndCategoryMasks()
+        {
+            var tree = new B2DynamicTree<int>();
+            var proxies = new DynamicTree.Proxy[64];
+            for (var i = 0; i < proxies.Length; i++)
+            {
+                var bounds = Box2.UnitCentered.Translated(new Vector2(i * 2, 0));
+                proxies[i] = tree.CreateProxy(bounds, 1u << (i % 2), i);
+            }
+
+            var movedBounds = Box2.UnitCentered.Translated(new Vector2(9, 0));
+            var enlargedBounds = Box2.UnitCentered.Translated(new Vector2(-4, 0));
+            var originalBounds = Box2.UnitCentered.Translated(new Vector2(80, 0));
+
+            List<int> Query(Box2 bounds, uint mask)
+            {
+                var found = new List<int>();
+                tree.Query(bounds, mask, (_, id) =>
+                {
+                    found.Add(id);
+                    return true;
+                });
+                return found;
+            }
+
+            tree.MoveProxy(proxies[40], movedBounds);
+            Assert.That(Query(originalBounds, 1), Is.Empty);
+            Assert.That(Query(movedBounds.Enlarged(0.25f), 1), Is.EquivalentTo(new[] { 4, 40 }));
+            Assert.That(Query(movedBounds.Enlarged(0.25f), 2), Is.EqualTo(new[] { 5 }));
+
+            tree.EnlargeProxy(proxies[1], enlargedBounds);
+            tree.MoveProxy(proxies[40], originalBounds);
+            tree.Rebuild(false);
+            Assert.That(Query(movedBounds.Enlarged(-0.25f), 1), Is.Empty);
+            Assert.That(Query(originalBounds, 1), Is.EqualTo(new[] { 40 }));
+            Assert.That(Query(enlargedBounds, 2), Is.EqualTo(new[] { 1 }));
+        }
+
+        [Test]
         public void ClearReleasesOnlyAllocatedLeaves()
         {
             var tree = new B2DynamicTree<string>(capacity: 4);

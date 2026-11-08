@@ -11,6 +11,37 @@ namespace Robust.UnitTesting.Shared.TransformTests;
 internal sealed class GridTraversalTest : RobustIntegrationTest
 {
     [Test]
+    public async Task GridIsolationChangesWhenAnotherGridMovesOrATileDisappears()
+    {
+        using var server = StartServer();
+        await server.WaitIdleAsync();
+        var entities = server.ResolveDependency<IEntityManager>();
+        var maps = entities.System<SharedMapSystem>();
+        var transforms = entities.System<SharedTransformSystem>();
+        await server.WaitAssertion(() =>
+        {
+            var map = maps.CreateMap(out var mapId);
+            var grid = maps.CreateGridEntity(mapId);
+            for (var x = 0; x < 3; x++)
+                maps.SetTile(grid, new Vector2i(x, 0), new Tile(1));
+
+            var other = maps.CreateGridEntity(mapId);
+            transforms.SetLocalPosition(other, new Vector2(10, 0));
+            maps.SetTile(other, Vector2i.Zero, new Tile(1));
+
+            var point = new Vector2(1.5f, 0.5f);
+            Assert.That(maps.CanStayOnGrid(map, grid, point), Is.True);
+            transforms.SetLocalPosition(other, Vector2.UnitX);
+            Assert.That(maps.CanStayOnGrid(map, grid, point), Is.False);
+            transforms.SetLocalPosition(other, new Vector2(10, 0));
+            Assert.That(maps.CanStayOnGrid(map, grid, point), Is.True);
+
+            maps.SetTile(grid, new Vector2i(1, 0), new Tile(0));
+            Assert.That(maps.CanStayOnGrid(map, grid, point), Is.False);
+        });
+    }
+
+    [Test]
     public async Task TestSpawnTraversal()
     {
         var server = StartServer();

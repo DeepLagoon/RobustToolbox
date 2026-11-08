@@ -96,6 +96,10 @@ public sealed partial class SharedGridTraversalSystem : EntitySystem
             ? xform.LocalPosition
             : Vector2.Transform(xform.LocalPosition, Transform(xform.ParentUid).LocalMatrix);
 
+        if (xform.GridUid is { } currentGrid && currentGrid == xform.ParentUid &&
+            _mapSystem.CanStayOnGrid(map, currentGrid, mapPos))
+            return;
+
         // Change parent if necessary
         if (_mapSystem.TryFindGridAt(map, mapPos, out var gridUid, out _))
         {

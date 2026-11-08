@@ -212,6 +212,7 @@ public abstract partial class SharedMapSystem
         if (TryComp<GridTreeComponent>(xform.MapUid, out var gridTree))
         {
             gridTree.Tree.MoveProxy(component.MapProxy, in aabb);
+            gridTree.TraversalRevision = ++_traversalRevision;
         }
 
         _physics.MovedGrids.Add(uid);
@@ -234,6 +235,7 @@ public abstract partial class SharedMapSystem
         if (TryComp<GridTreeComponent>(xform.MapUid, out var gridTree))
         {
             gridTree.Tree.MoveProxy(component.MapProxy, in aabb);
+            gridTree.TraversalRevision = ++_traversalRevision;
         }
 
         _physics.MovedGrids.Add(uid);
@@ -584,6 +586,7 @@ public abstract partial class SharedMapSystem
             if (TryComp<GridTreeComponent>(xform.MapUid, out var gridTree))
             {
                 var proxy = gridTree.Tree.CreateProxy(in aabb, uint.MaxValue, (uid, _fixturesQuery.Comp(uid), component));
+                gridTree.TraversalRevision = ++_traversalRevision;
                 DebugTools.Assert(component.MapProxy == DynamicTree.Proxy.Free);
                 component.MapProxy = proxy;
             }
@@ -638,6 +641,7 @@ public abstract partial class SharedMapSystem
         if (TryComp<GridTreeComponent>(xform.MapUid, out var gridTree))
         {
             var proxy = gridTree.Tree.CreateProxy(in aabb, uint.MaxValue, (uid, _fixturesQuery.Comp(uid), grid));
+            gridTree.TraversalRevision = ++_traversalRevision;
             DebugTools.Assert(grid.MapProxy == DynamicTree.Proxy.Free);
             grid.MapProxy = proxy;
         }
@@ -653,6 +657,7 @@ public abstract partial class SharedMapSystem
         if (grid.MapProxy != DynamicTree.Proxy.Free && TryComp<GridTreeComponent>(mapUid, out var gridTree))
         {
             gridTree.Tree.DestroyProxy(grid.MapProxy);
+            gridTree.TraversalRevision = ++_traversalRevision;
         }
 
         grid.MapProxy = DynamicTree.Proxy.Free;

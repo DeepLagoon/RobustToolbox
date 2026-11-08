@@ -39,7 +39,8 @@ public sealed class DynamicTreeBroadPhase : IBroadPhase
 
     public void MoveProxy(DynamicTree.Proxy proxy, in Box2 aabb)
     {
-        _tree.MoveProxy(proxy, in aabb);
+        if (!_tree.TryRefitProxy(proxy, in aabb))
+            _tree.MoveProxy(proxy, in aabb);
     }
 
     public void RemoveProxy(DynamicTree.Proxy proxy)
