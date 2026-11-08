@@ -1603,6 +1603,9 @@ public abstract partial class SharedTransformSystem
         }
     }
 
+    private static readonly string[] LocalPositionRotationFields =
+        [nameof(TransformComponent.LocalPosition), nameof(TransformComponent.LocalRotation)];
+
     [Obsolete("Use override with EntityUid")]
     public void SetLocalPositionRotation(TransformComponent xform, Vector2 pos, Angle rot)
         => SetLocalPositionRotation(xform.Owner, pos, rot, xform);
@@ -1638,9 +1641,7 @@ public abstract partial class SharedTransformSystem
         DebugTools.Assert(!xform.NoLocalRotation || xform.LocalRotation == 0);
 
         var meta = MetaData(uid);
-        DirtyFields(uid, xform, meta,
-            nameof(TransformComponent.LocalPosition),
-            nameof(TransformComponent.LocalRotation));
+        DirtyFields(uid, xform, meta, LocalPositionRotationFields);
         xform.MatricesDirty = true;
 
         if (!xform.Initialized)

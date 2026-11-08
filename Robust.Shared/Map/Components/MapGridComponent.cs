@@ -77,6 +77,8 @@ public sealed partial class MapGridComponent : Component
     /// Map DynamicTree proxy to lookup for grid intersection.
     /// </summary>
     internal DynamicTree.Proxy MapProxy = DynamicTree.Proxy.Free;
+    internal ulong TraversalRevision;
+    internal bool TraversalIsolated;
 
     /// <summary>
     /// Grid chunks than make up this grid.
