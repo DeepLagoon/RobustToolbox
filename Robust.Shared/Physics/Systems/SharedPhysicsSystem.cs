@@ -7,7 +7,6 @@ using Robust.Shared.GameStates;
 using Robust.Shared.Map;
 using Robust.Shared.Map.Components;
 using Robust.Shared.Maths;
-using Robust.Shared.Network;
 using Robust.Shared.Physics.Collision;
 using Robust.Shared.Physics.Components;
 using Robust.Shared.Physics.Events;
@@ -42,7 +41,6 @@ namespace Robust.Shared.Physics.Systems
                 Buckets = Histogram.ExponentialBuckets(0.000_001, 1.5, 25)
             });
 
-        [Dependency] private INetManager _physicsNet = default!;
         [Dependency] private IConfigurationManager _cfg = default!;
         [Dependency] private IManifoldManager _manifoldManager = default!;
         [Dependency] private IParallelManager _parallel = default!;
@@ -259,7 +257,7 @@ namespace Robust.Shared.Physics.Systems
         {
             var substeps = GetGridMotionSubsteps(deltaTime, prediction);
             _prof.WriteValue("Initial physics substeps", substeps);
-            if (substeps > Math.Max(1, _substeps) && _physicsNet.IsServer && _cfg.GetCVar(CVars.LocalGridSubsteps))
+            if (substeps > Math.Max(1, _substeps) && _netMan.IsServer && _cfg.GetCVar(CVars.LocalGridSubsteps))
             {
                 SimulateLocalGridSubsteps(deltaTime);
                 return;

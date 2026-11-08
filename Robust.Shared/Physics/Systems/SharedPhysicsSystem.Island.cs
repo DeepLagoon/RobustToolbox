@@ -712,7 +712,7 @@ public abstract partial class SharedPhysicsSystem
 
         // Preparation runs in the existing solver jobs, before ECS move handlers can
         // change the world. Small solves keep the existing inline fixture update.
-        var prepareMoves = totalBodies >= 256 && _physicsNet.IsServer && _cfg.GetCVar(CVars.PrepareFixtureMoves);
+        var prepareMoves = totalBodies >= 256 && _netMan.IsServer && _cfg.GetCVar(CVars.PrepareFixtureMoves);
         _solveIslandsJob.EnsureCapacity(totalBodies, prepareMoves);
         var solvedPositions = _solveIslandsJob.SolvedPositions;
         var solvedAngles = _solveIslandsJob.SolvedAngles;
@@ -836,7 +836,7 @@ public abstract partial class SharedPhysicsSystem
             ref CachedPhysicsPose<(Angle Rotation, Matrix3x2 Inverse)> parentPose)
         {
             var data = Data;
-            if (System._physicsNet.IsServer && !island.LoneIsland)
+            if (System._netMan.IsServer && !island.LoneIsland)
             {
                 // Bodies that used different step sizes cannot share a warm-start ratio
                 // on the first solve after their islands merge.

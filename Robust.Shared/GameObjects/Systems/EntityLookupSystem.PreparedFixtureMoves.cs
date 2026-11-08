@@ -113,7 +113,7 @@ public sealed partial class EntityLookupSystem
 
             var sameGeometry = fixture.Shape switch
             {
-                PhysShapeCircle circle => !move.Polygon && circle.Position.Equals(move.Point0),
+                PhysShapeCircle circle => !move.Polygon && move.Point0.Equals(circle.Position),
                 PolygonShape { Vertices: [var a, var b, var c, var d] } => move.Polygon &&
                     a.Equals(move.Point0) && b.Equals(move.Point1) && c.Equals(move.Point2) && d.Equals(move.Point3),
                 _ => false
