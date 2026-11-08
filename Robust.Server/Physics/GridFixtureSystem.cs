@@ -256,9 +256,26 @@ namespace Robust.Server.Physics
             }
 
             _isSplitting = true;
+            try
+            {
+                SplitDisconnectedGrids(uid, grid, splitComp, dirtyNodes);
+            }
+            finally
+            {
+                _splitGrids.Clear();
+                _splitGridSizes.Clear();
+                _splitFrontier.Clear();
+                _isSplitting = false;
+            }
+
+            Log.Debug($"Stopped split check for {ToPrettyString(uid)}");
+            SendNodeDebug(uid);
+        }
+
+        private void SplitDisconnectedGrids(EntityUid uid, MapGridComponent grid, GridSplitNodeComponent splitComp,
+            HashSet<ChunkSplitNode> dirtyNodes)
+        {
             Log.Debug($"Started split check for {ToPrettyString(uid)}");
-            _splitFrontier.Clear();
-            _splitGrids.Clear();
 
             while (dirtyNodes.Count > 0)
             {
@@ -300,7 +317,6 @@ namespace Robust.Server.Physics
 
                 // We'll leave the biggest group as the original grid
                 // anything smaller gets split off.
-                _splitGridSizes.Clear();
                 foreach (var sizeGroup in grids)
                 {
                     var tileCount = 0;
@@ -421,12 +437,18 @@ namespace Robust.Server.Physics
                         splitComp.Nodes[node.Group.Chunk.Indices].Nodes.Remove(node);
                     }
 
-                    var eevee = new PostGridSplitEvent(oldGridUid, newGridUid);
-                    RaiseLocalEvent(uid, ref eevee, true);
+                    try
+                    {
+                        var postSplit = new PostGridSplitEvent(oldGridUid, newGridUid);
+                        RaiseLocalEvent(uid, ref postSplit, true);
+                    }
+                    finally
+                    {
+                        // Tiles and entities were already copied. Finish the transfer even if a listener failed.
+                        _maps.SetTiles(oldGridUid, oldGrid, oldTileData);
+                        GenerateSplitNodes(newGridUid, newGrid);
+                    }
 
-                    // Set tiles on old grid
-                    _maps.SetTiles(oldGridUid, oldGrid, oldTileData);
-                    GenerateSplitNodes(newGridUid, newGrid);
                     SendNodeDebug(newGridUid);
                 }
 
@@ -450,12 +472,6 @@ namespace Robust.Server.Physics
 
                 Log.Debug($"Split {grids.Count} grids in {sw.Elapsed}");
             }
-
-            _splitGrids.Clear();
-            _splitFrontier.Clear();
-            Log.Debug($"Stopped split check for {ToPrettyString(uid)}");
-            _isSplitting = false;
-            SendNodeDebug(oldGridUid);
         }
 
         private void GenerateSplitNodes(EntityUid gridUid, MapGridComponent grid)

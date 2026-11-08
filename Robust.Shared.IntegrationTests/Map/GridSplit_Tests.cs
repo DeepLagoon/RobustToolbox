@@ -8,6 +8,7 @@ using Robust.Shared.Map;
 using Robust.Shared.Map.Components;
 using Robust.Shared.Maths;
 using Robust.Shared.Physics.Components;
+using Robust.Server.Physics;
 using Robust.Server.Physics.Components;
 using Robust.UnitTesting.Server;
 
@@ -77,6 +78,57 @@ internal sealed class GridSplit_Tests
         Assert.That(mapSystem.GetAllGrids(mapId).Count(), Is.EqualTo(2));
 
         mapSystem.DeleteMap(mapId);
+    }
+
+    [Test]
+    public void SplitRecoversFromPostSplitHandlerException()
+    {
+        var sim = RobustServerSimulation.NewSimulation()
+            .RegisterEntitySystems(factory => factory.LoadExtraSystemType<FailingSplitSystem>())
+            .InitializeInstance();
+        sim.Resolve<IConfigurationManager>().SetCVar(CVars.GridSplitting, true);
+        var entities = sim.Resolve<IEntityManager>();
+        var maps = entities.System<SharedMapSystem>();
+        var mapId = sim.CreateMap().MapId;
+        var firstGrid = maps.CreateGridEntity(mapId);
+        var secondGrid = maps.CreateGridEntity(mapId);
+        entities.System<SharedTransformSystem>().SetWorldPosition(secondGrid.Owner, new Vector2(10, 0));
+
+        for (var x = 0; x < 3; x++)
+        {
+            maps.SetTile(firstGrid, new Vector2i(x, 0), new Tile(1));
+            maps.SetTile(secondGrid, new Vector2i(x, 0), new Tile(1));
+        }
+
+        var middle = new Vector2i(1, 0);
+        entities.System<FailingSplitSystem>().FailOnGrid = firstGrid.Owner;
+        Assert.Throws<InvalidOperationException>(() => maps.SetTile(firstGrid, middle, Tile.Empty));
+
+        maps.SetTile(secondGrid, middle, Tile.Empty);
+        var grids = maps.GetAllGrids(mapId).ToArray();
+        Assert.Multiple(() =>
+        {
+            Assert.That(grids, Has.Length.EqualTo(4), "The exception must not block splitting other grids.");
+            Assert.That(grids.Select(grid => maps.GetAllTiles(grid.Owner, grid.Comp).Count()),
+                Is.All.EqualTo(1), "The split must not leave duplicate tiles on the original grid.");
+        });
+        maps.DeleteMap(mapId);
+    }
+
+    private sealed partial class FailingSplitSystem : EntitySystem
+    {
+        public EntityUid FailOnGrid;
+
+        public override void Initialize()
+        {
+            SubscribeLocalEvent<PostGridSplitEvent>(OnPostGridSplit);
+        }
+
+        private void OnPostGridSplit(ref PostGridSplitEvent ev)
+        {
+            if (ev.OldGrid == FailOnGrid)
+                throw new InvalidOperationException("Injected grid split failure.");
+        }
     }
 
     [Test]
