@@ -58,6 +58,9 @@ namespace Robust.Shared.Physics.Dynamics.Contacts
         /// </summary>
         public readonly LinkedListNode<Contact> MapNode;
 
+        // Mirrors MapNode.Next for the hot validation loop, which already has the contact in hand.
+        internal Contact? NextActiveContact;
+
         /// <summary>
         /// The node of this contact on body A.
         /// </summary>

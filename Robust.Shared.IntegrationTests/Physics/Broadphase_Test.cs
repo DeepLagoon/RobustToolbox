@@ -1,3 +1,5 @@
+using System;
+using System.Collections.Generic;
 using System.Diagnostics.CodeAnalysis;
 using System.Linq;
 using System.Numerics;
@@ -10,7 +12,9 @@ using Robust.Shared.Physics;
 using Robust.Shared.Physics.Collision.Shapes;
 using Robust.Shared.Physics.Components;
 using Robust.Shared.Physics.Dynamics;
+using Robust.Shared.Physics.Events;
 using Robust.Shared.Physics.Systems;
+using Robust.Shared.Reflection;
 using Robust.UnitTesting.Server;
 
 namespace Robust.UnitTesting.Shared.Physics;
@@ -67,6 +71,144 @@ internal sealed class Broadphase_Test
 
         // Make sure it's actually marked as touching and not just "well it's in range right".
         Assert.That(staticBody.Contacts.First!.Value.IsTouching, Is.EqualTo(true));
+    }
+
+    [Test]
+    public void SmallIslandsResolveContactsAgainstSharedStaticBody()
+    {
+        var sim = RobustServerSimulation.NewSimulation().InitializeInstance();
+        var entities = sim.Resolve<IEntityManager>();
+        var fixtures = entities.System<FixtureSystem>();
+        var physics = entities.System<SharedPhysicsSystem>();
+        var (map, _) = sim.CreateMap();
+
+        var wall = entities.SpawnEntity(null, new EntityCoordinates(map, Vector2.Zero));
+        var wallBody = entities.AddComponent<PhysicsComponent>(wall);
+        var shape = new PolygonShape();
+        const int count = 128;
+        shape.SetAsBox(0.35f, count + 2f);
+        Assert.That(fixtures.TryCreateFixture(wall, shape, "wall", collisionLayer: 1, friction: 0f), Is.True);
+        physics.SetCanCollide(wall, true, body: wallBody);
+
+        var bodies = new (EntityUid Uid, PhysicsComponent Body, int Side, float AlongWall)[count];
+        for (var i = 0; i < bodies.Length; i++)
+        {
+            var side = i % 2 == 0 ? 1 : -1;
+            var uid = entities.SpawnEntity(null, new EntityCoordinates(map, new Vector2(side * 0.55f, i * 2f - (count - 1f))));
+            var body = entities.AddComponent<PhysicsComponent>(uid);
+            var alongWall = 0.125f * (i + 1);
+            Assert.That(fixtures.TryCreateFixture(uid, new PhysShapeCircle(0.25f), "circle",
+                collisionMask: 1, friction: 0f), Is.True);
+            physics.SetBodyType(uid, BodyType.Dynamic, body: body);
+            physics.SetLinearDamping(uid, body, 0f);
+            physics.SetLinearVelocity(uid, new Vector2(-side * 4f, alongWall), body: body);
+            bodies[i] = (uid, body, side, alongWall);
+        }
+
+        for (var i = 0; i < 4; i++)
+            physics.Update(1f / 30);
+
+        foreach (var (uid, body, side, alongWall) in bodies)
+        {
+            Assert.That(side * body.LinearVelocity.X, Is.GreaterThanOrEqualTo(-0.01f));
+            Assert.That(body.LinearVelocity.Y, Is.EqualTo(alongWall).Within(0.001f));
+            Assert.That(side * entities.GetComponent<TransformComponent>(uid).LocalPosition.X, Is.GreaterThan(0.5f));
+        }
+    }
+
+    [Test]
+    public void ContactValidationKeepsOrderWhenEndHandlerRemovesAndAddsContacts()
+    {
+        var sim = RobustServerSimulation.NewSimulation()
+            .RegisterEntitySystems(factory => factory.LoadExtraSystemType<ContactOrderRecorder>())
+            .InitializeInstance();
+        var entities = sim.Resolve<IEntityManager>();
+        var fixtures = entities.System<FixtureSystem>();
+        var physics = entities.System<SharedPhysicsSystem>();
+        var transform = entities.System<SharedTransformSystem>();
+        var recorder = entities.System<ContactOrderRecorder>();
+        var (map, _) = sim.CreateMap();
+
+        (EntityUid Uid, Fixture Fixture) Spawn(float x, BodyType type)
+        {
+            var uid = entities.SpawnEntity(null, new EntityCoordinates(map, new Vector2(x, 0f)));
+            var body = entities.AddComponent<PhysicsComponent>(uid);
+            var fixture = new Fixture(new PhysShapeCircle(0.5f), 1, 1, true);
+            fixtures.CreateFixture(uid, "circle", fixture, body: body);
+            physics.SetBodyType(uid, type, body: body);
+            physics.SetCanCollide(uid, true, body: body);
+            if (type == BodyType.Dynamic)
+                physics.WakeBody(uid, body: body);
+            return (uid, fixture);
+        }
+
+        var pairs = new ((EntityUid Uid, Fixture Fixture) Moving, (EntityUid Uid, Fixture Fixture) Static)[5];
+        for (var i = 0; i < pairs.Length; i++)
+            pairs[i] = (Spawn(4f * i, BodyType.Dynamic), Spawn(4f * i + 0.5f, BodyType.Static));
+
+        void AddContact(int pair)
+        {
+            var (moving, support) = pairs[pair];
+            physics.AddPair("circle", "circle", moving.Fixture.Proxies[0], support.Fixture.Proxies[0]);
+        }
+
+        AddContact(0);
+        physics.CollideContacts();
+        Assert.That(recorder.Events, Is.EqualTo(new[] { (pairs[0].Moving.Uid, true) }));
+        recorder.Events.Clear();
+
+        AddContact(1);
+        AddContact(2);
+        AddContact(3);
+
+        recorder.OnEnd = uid =>
+        {
+            if (uid != pairs[0].Moving.Uid)
+                return;
+
+            var (moving, support) = pairs[2];
+            physics.DestroyContact(moving.Fixture.Contacts[support.Fixture]);
+            AddContact(4);
+        };
+
+        transform.SetLocalPosition(pairs[0].Moving.Uid, new Vector2(-2f, 0f));
+        physics.CollideContacts();
+
+        Assert.That(recorder.Events, Is.EqualTo(new[]
+        {
+            (pairs[0].Moving.Uid, false),
+            (pairs[1].Moving.Uid, true),
+            (pairs[3].Moving.Uid, true),
+            (pairs[4].Moving.Uid, true),
+        }));
+    }
+
+    [Reflect(false)]
+    private sealed class ContactOrderRecorder : EntitySystem
+    {
+        public readonly List<(EntityUid Entity, bool Started)> Events = new();
+        public Action<EntityUid>? OnEnd;
+
+        public override void Initialize()
+        {
+            SubscribeLocalEvent<PhysicsComponent, StartCollideEvent>(OnStart);
+            SubscribeLocalEvent<PhysicsComponent, EndCollideEvent>(OnFinish);
+        }
+
+        private void OnStart(Entity<PhysicsComponent> ent, ref StartCollideEvent ev)
+        {
+            if (ent.Comp.BodyType == BodyType.Dynamic)
+                Events.Add((ent.Owner, true));
+        }
+
+        private void OnFinish(Entity<PhysicsComponent> ent, ref EndCollideEvent ev)
+        {
+            if (ent.Comp.BodyType != BodyType.Dynamic)
+                return;
+
+            Events.Add((ent.Owner, false));
+            OnEnd?.Invoke(ent.Owner);
+        }
     }
 
     /// <summary>

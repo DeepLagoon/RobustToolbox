@@ -22,6 +22,8 @@
 
 using System;
 using System.Numerics;
+using System.Runtime.InteropServices;
+using Robust.Shared.GameObjects;
 using Robust.Shared.Maths;
 using Robust.Shared.Physics.Collision;
 using Robust.Shared.Physics.Components;
@@ -40,6 +42,7 @@ public abstract partial class SharedPhysicsSystem
         ContactPositionConstraint[] positionConstraints)
     {
         var contactCount = island.Contacts.Count;
+        var compactBodies = island.UsesBodyIndex ? default : CollectionsMarshal.AsSpan(island.Bodies);
 
         // Build constraints
         // For now these are going to be bare but will change
@@ -63,8 +66,16 @@ public abstract partial class SharedPhysicsSystem
             velocityConstraint.Friction = contact.Friction;
             velocityConstraint.Restitution = contact.Restitution;
             velocityConstraint.TangentSpeed = contact.TangentSpeed;
-            velocityConstraint.IndexA = bodyA.IslandIndex[island.Index];
-            velocityConstraint.IndexB = bodyB.IslandIndex[island.Index];
+            if (compactBodies.IsEmpty)
+            {
+                velocityConstraint.IndexA = bodyA.IslandIndex[island.Index];
+                velocityConstraint.IndexB = bodyB.IslandIndex[island.Index];
+            }
+            else
+            {
+                velocityConstraint.IndexA = FindIslandBodyIndex(compactBodies, bodyA);
+                velocityConstraint.IndexB = FindIslandBodyIndex(compactBodies, bodyB);
+            }
             // Don't need to reset point data as it all gets set below.
 
             var (invMassA, invMassB) = GetInvMass(bodyA, bodyB);
@@ -79,8 +90,8 @@ public abstract partial class SharedPhysicsSystem
             velocityConstraint.NormalMass = System.Numerics.Vector4.Zero;
 
             ref var positionConstraint = ref positionConstraints[i];
-            positionConstraint.IndexA = bodyA.IslandIndex[island.Index];
-            positionConstraint.IndexB = bodyB.IslandIndex[island.Index];
+            positionConstraint.IndexA = velocityConstraint.IndexA;
+            positionConstraint.IndexB = velocityConstraint.IndexB;
             (positionConstraint.InvMassA, positionConstraint.InvMassB) = (invMassA, invMassB);
             positionConstraint.LocalCenterA = bodyA.LocalCenter;
             positionConstraint.LocalCenterB = bodyB.LocalCenter;
@@ -122,6 +133,17 @@ public abstract partial class SharedPhysicsSystem
                 posPoints[j] = contactPoint.LocalPoint;
             }
         }
+    }
+
+    private static int FindIslandBodyIndex(ReadOnlySpan<Entity<PhysicsComponent, TransformComponent>> bodies, PhysicsComponent body)
+    {
+        for (var i = 0; i < bodies.Length; i++)
+        {
+            if (ReferenceEquals(bodies[i].Comp1, body))
+                return i;
+        }
+
+        throw new InvalidOperationException("Contact body is missing from its physics island.");
     }
 
     private (float, float) GetInvMass(PhysicsComponent bodyA, PhysicsComponent bodyB)

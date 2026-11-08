@@ -417,19 +417,15 @@ public partial class SharedPhysicsSystem
         if (body.BodyType == BodyType.Static)
             return false;
 
-        if (value * value > 0.0f)
+        if (value * value > 0.0f && (!body.Awake || !body.CanCollide))
         {
             if (!WakeBody(uid, manager: manager, body: body))
                 return false;
         }
 
-        // CloseToPercent tolerance needs to be small enough such that an angular velocity just above
-        // sleep-tolerance can damp down to sleeping.
-
-        if (MathHelper.CloseToPercent(body.AngularVelocity, value, 0.00001f))
+        if (!ApplyAngularVelocity(body, value))
             return false;
 
-        body.AngularVelocity = value;
         if (dirty)
             DirtyField(uid, body, nameof(PhysicsComponent.AngularVelocity));
 
@@ -447,19 +443,37 @@ public partial class SharedPhysicsSystem
         if (body.BodyType == BodyType.Static)
             return false;
 
-        if (wakeBody && Vector2.Dot(velocity, velocity) > 0.0f)
+        if (wakeBody && Vector2.Dot(velocity, velocity) > 0.0f && (!body.Awake || !body.CanCollide))
         {
             if (!WakeBody(uid, manager: manager, body: body))
                 return false;
         }
 
+        if (!ApplyLinearVelocity(body, velocity))
+            return false;
+
+        if (dirty)
+            DirtyField(uid, body, nameof(PhysicsComponent.LinearVelocity));
+
+        return true;
+    }
+
+    private static bool ApplyAngularVelocity(PhysicsComponent body, float velocity)
+    {
+        // Preserve damping just above the sleep threshold.
+        if (MathHelper.CloseToPercent(body.AngularVelocity, velocity, 0.00001f))
+            return false;
+
+        body.AngularVelocity = velocity;
+        return true;
+    }
+
+    private static bool ApplyLinearVelocity(PhysicsComponent body, Vector2 velocity)
+    {
         if (body.LinearVelocity.EqualsApprox(velocity, 0.0000001f))
             return false;
 
         body.LinearVelocity = velocity;
-        if (dirty)
-            DirtyField(uid, body, nameof(PhysicsComponent.LinearVelocity));
-
         return true;
     }
 

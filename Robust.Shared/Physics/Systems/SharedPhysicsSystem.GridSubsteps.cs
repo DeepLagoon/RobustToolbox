@@ -36,8 +36,11 @@ public abstract partial class SharedPhysicsSystem
     }
 
     private int GetGridMotionSubsteps(float deltaTime, bool prediction)
+        => EstimateGridMotionSubsteps(deltaTime, prediction, Math.Max(1, _substeps));
+
+    private int EstimateGridMotionSubsteps(float deltaTime, bool prediction, int baseSteps,
+        HashSet<EntityUid>? seeds = null)
     {
-        var baseSteps = Math.Max(1, _substeps);
         var maxGridSpeed = 0f;
         var grids = EntityQueryEnumerator<MapGridComponent, PhysicsComponent>();
         while (grids.MoveNext(out var grid, out var body))
@@ -51,16 +54,17 @@ public abstract partial class SharedPhysicsSystem
         if (maxGridSpeed <= 0f || deltaTime <= 0f)
             return baseSteps;
 
-        var maxOtherSpeed = maxGridSpeed;
+        var maxOtherSpeedSquared = 0f;
         foreach (var ent in AwakeBodies)
         {
             if (!ent.Comp1.CanCollide || prediction && !ent.Comp1.Predict)
                 continue;
-            var speed = ent.Comp1.LinearVelocity.Length();
-            if (float.IsFinite(speed))
-                maxOtherSpeed = MathF.Max(maxOtherSpeed, speed);
+            var speedSquared = ent.Comp1.LinearVelocity.LengthSquared();
+            if (float.IsFinite(speedSquared))
+                maxOtherSpeedSquared = MathF.Max(maxOtherSpeedSquared, speedSquared);
         }
 
+        var maxOtherSpeed = MathF.Max(maxGridSpeed, MathF.Sqrt(maxOtherSpeedSquared));
         var travel = (maxGridSpeed + maxOtherSpeed) * deltaTime;
         var required = MathF.Ceiling(travel / MaxGridSurfaceTravel);
         if (required <= baseSteps)
@@ -68,14 +72,17 @@ public abstract partial class SharedPhysicsSystem
 
         // The world maximum is only a conservative broadphase search radius. A
         // distant projectile must not select the step count for an unrelated hull.
-        var relativeSpeed = GetNearbyGridCollisionSpeed(travel + MaxGridSurfaceTravel, deltaTime, prediction);
+        var minRelativeSpeed = baseSteps * MaxGridSurfaceTravel / deltaTime;
+        var relativeSpeed = GetNearbyGridCollisionSpeed(travel + MaxGridSurfaceTravel, deltaTime, prediction,
+            minRelativeSpeed, seeds);
         required = MathF.Ceiling(relativeSpeed * deltaTime / MaxGridSurfaceTravel);
 
         // Preserve configured stepping and bound additional work at extreme admin velocities.
         return Math.Max(baseSteps, (int) Math.Clamp(required, 1f, MaxGridMotionSubsteps));
     }
 
-    private float GetNearbyGridCollisionSpeed(float padding, float deltaTime, bool prediction)
+    private float GetNearbyGridCollisionSpeed(float padding, float deltaTime, bool prediction,
+        float minRelativeSpeed, HashSet<EntityUid>? seeds)
     {
         var maxRelativeSpeed = 0f;
         var maps = EntityManager.System<SharedMapSystem>();
@@ -92,11 +99,13 @@ public abstract partial class SharedPhysicsSystem
             var sweptBounds = bounds.Enlarged(angularSpeed * deltaTime + MaxGridSurfaceTravel);
             var state = (Physics: this, Owner: uid, Bounds: sweptBounds,
                 Velocity: body.LinearVelocity, AngularSpeed: angularSpeed,
-                DeltaTime: deltaTime, Prediction: prediction, MaxRelative: 0f);
+                DeltaTime: deltaTime, Prediction: prediction, MinRelative: minRelativeSpeed,
+                Seeds: seeds, MaxRelative: 0f);
             maps.FindGridsIntersecting(xform.MapID, bounds.Enlarged(padding), ref state,
                 static (EntityUid other, MapGridComponent otherGrid,
                     ref (SharedPhysicsSystem Physics, EntityUid Owner, Box2 Bounds, Vector2 Velocity, float AngularSpeed,
-                        float DeltaTime, bool Prediction, float MaxRelative) state) =>
+                        float DeltaTime, bool Prediction, float MinRelative, HashSet<EntityUid>? Seeds,
+                        float MaxRelative) state) =>
                 {
                     if (other == state.Owner)
                         return true;
@@ -113,12 +122,18 @@ public abstract partial class SharedPhysicsSystem
                         }
                     }
                     var relativeVelocity = otherVelocity - state.Velocity;
+                    var relativeSpeed = relativeVelocity.Length() + state.AngularSpeed + otherAngular;
+                    if (!float.IsFinite(relativeSpeed) || relativeSpeed <= (state.Seeds == null ? state.MaxRelative : state.MinRelative))
+                        return true;
+
                     var otherBounds = state.Physics.GridWorldBounds(otherGrid, state.Physics.XformQuery.GetComponent(other));
-                    var otherSwept = otherBounds.Union(otherBounds.Translated(relativeVelocity * state.DeltaTime))
-                        .Enlarged(otherAngular * state.DeltaTime);
-                    if (state.Bounds.Intersects(otherSwept))
-                        state.MaxRelative = MathF.Max(state.MaxRelative,
-                            relativeVelocity.Length() + state.AngularSpeed + otherAngular);
+                    if (SweepsIntoBounds(state.Bounds, otherBounds.Enlarged(otherAngular * state.DeltaTime),
+                        relativeVelocity * state.DeltaTime))
+                    {
+                        state.MaxRelative = MathF.Max(state.MaxRelative, relativeSpeed);
+                        state.Seeds?.Add(state.Owner);
+                        state.Seeds?.Add(other);
+                    }
                     return true;
                 }, approx: true, includeMap: false);
             // The map broadphase also contains debris that is not itself a grid. Children
@@ -136,15 +151,40 @@ public abstract partial class SharedPhysicsSystem
                     ? otherBody.LinearVelocity : Vector2.Zero;
                 var relativeVelocity = otherVelocity - body.LinearVelocity;
                 var relativeSpeed = relativeVelocity.Length() + angularSpeed;
-                if (!float.IsFinite(relativeSpeed))
+                if (!float.IsFinite(relativeSpeed) || relativeSpeed <= (seeds == null ? maxRelativeSpeed : minRelativeSpeed))
                     continue;
                 var otherBounds = _lookup.GetWorldAABB(other);
-                var otherSwept = otherBounds.Union(otherBounds.Translated(relativeVelocity * deltaTime));
-                if (sweptBounds.Intersects(otherSwept))
+                if (SweepsIntoBounds(sweptBounds, otherBounds, relativeVelocity * deltaTime))
+                {
                     maxRelativeSpeed = MathF.Max(maxRelativeSpeed, relativeSpeed);
+                    seeds?.Add(uid);
+                    seeds?.Add(other);
+                }
             }
         }
         _gridMotionCandidates.Clear();
         return maxRelativeSpeed;
+    }
+
+    // The union of the start and end boxes contains empty corners on a diagonal path.
+    // Both axes must overlap at the same time for the pair to request smaller steps.
+    private static bool SweepsIntoBounds(Box2 bounds, Box2 moving, Vector2 displacement)
+    {
+        var start = 0f;
+        var end = 1f;
+        return OverlapsDuringSweep(bounds.Left - moving.Right, bounds.Right - moving.Left, displacement.X, ref start, ref end)
+            && OverlapsDuringSweep(bounds.Bottom - moving.Top, bounds.Top - moving.Bottom, displacement.Y, ref start, ref end);
+    }
+
+    private static bool OverlapsDuringSweep(float min, float max, float displacement, ref float start, ref float end)
+    {
+        if (displacement == 0f)
+            return min <= 0f && max >= 0f;
+
+        var entry = min / displacement;
+        var exit = max / displacement;
+        start = MathF.Max(start, MathF.Min(entry, exit));
+        end = MathF.Min(end, MathF.Max(entry, exit));
+        return start <= end;
     }
 }

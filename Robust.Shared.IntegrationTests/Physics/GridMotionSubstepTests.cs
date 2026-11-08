@@ -5,12 +5,14 @@ using NUnit.Framework;
 using Robust.Shared;
 using Robust.Shared.Configuration;
 using Robust.Shared.GameObjects;
+using Robust.Shared.IoC;
 using Robust.Shared.Map;
 using Robust.Shared.Maths;
 using Robust.Shared.Physics;
 using Robust.Shared.Physics.Collision.Shapes;
 using Robust.Shared.Physics.Components;
 using Robust.Shared.Physics.Dynamics;
+using Robust.Shared.Physics.Events;
 using Robust.Shared.Physics.Systems;
 using Robust.UnitTesting.Server;
 
@@ -19,6 +21,228 @@ namespace Robust.UnitTesting.Shared.Physics;
 [TestFixture]
 public sealed class GridMotionSubstepTests
 {
+    [Test]
+    public void AdaptiveSubstepsShortenAfterFastMotionStops()
+    {
+        var sim = RobustServerSimulation.NewSimulation()
+            .RegisterEntitySystems(systems => systems.LoadExtraSystemType<StopGridsAfterFirstStep>())
+            .InitializeInstance();
+        var entities = sim.Resolve<IEntityManager>();
+        var cfg = sim.Resolve<IConfigurationManager>();
+        cfg.SetCVar(CVars.NetTickrate, 30);
+        cfg.SetCVar(CVars.TargetMinimumTickrate, 60);
+        cfg.SetCVar(CVars.LocalGridSubsteps, false);
+        var maps = entities.System<SharedMapSystem>();
+        var physics = entities.System<SharedPhysicsSystem>();
+        var transforms = entities.System<SharedTransformSystem>();
+        var probe = entities.System<StopGridsAfterFirstStep>();
+        var map = sim.CreateMap();
+        for (var i = 0; i < 2; i++)
+        {
+            var grid = maps.CreateGridEntity(map.MapId);
+            maps.SetTile(grid, Vector2i.Zero, new Tile(1));
+            transforms.SetLocalPosition(grid, new Vector2(i * 4, 0));
+            physics.SetBodyType(grid, BodyType.Dynamic);
+            physics.SetLinearVelocity(grid, new Vector2(i == 0 ? 200 : -200, 0));
+            probe.Grids.Add(grid);
+        }
+
+        const float delta = 1f / 30;
+        physics.Update(delta);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(probe.FirstStep, Is.LessThan(delta / 2), "Approaching grids require fine initial steps.");
+            Assert.That(probe.Steps, Is.LessThan(10), "The solver should return to coarse steps once the grids stop.");
+            Assert.That(probe.Elapsed, Is.EqualTo(delta).Within(1e-6), "Repartitioning must simulate the full tick.");
+        });
+    }
+
+    private sealed class StopGridsAfterFirstStep : EntitySystem
+    {
+        [Dependency] private SharedPhysicsSystem _physics = default!;
+
+        public readonly List<EntityUid> Grids = new();
+        public int Steps;
+        public float FirstStep;
+        public float Elapsed;
+
+        public override void Initialize()
+        {
+            SubscribeLocalEvent<PhysicsUpdateAfterSolveEvent>(OnAfterSolve);
+        }
+
+        private void OnAfterSolve(ref PhysicsUpdateAfterSolveEvent ev)
+        {
+            Elapsed += ev.DeltaTime;
+            if (++Steps != 1)
+                return;
+
+            FirstStep = ev.DeltaTime;
+            foreach (var grid in Grids)
+                _physics.SetLinearVelocity(grid, Vector2.Zero);
+        }
+    }
+
+    [TestCase(false)]
+    [TestCase(true)]
+    public void FastGridCollisionOnlySubstepsNearbyAndJointedBodies(bool attachDuringCollision)
+    {
+        var sim = RobustServerSimulation.NewSimulation()
+            .RegisterEntitySystems(systems => systems.LoadExtraSystemType<AttachOnImpact>())
+            .InitializeInstance();
+        var entities = sim.Resolve<IEntityManager>();
+        var cfg = sim.Resolve<IConfigurationManager>();
+        cfg.SetCVar(CVars.NetTickrate, 30);
+        cfg.SetCVar(CVars.TargetMinimumTickrate, 60);
+        var maps = entities.System<SharedMapSystem>();
+        var physics = entities.System<SharedPhysicsSystem>();
+        var transforms = entities.System<SharedTransformSystem>();
+        var joints = entities.System<SharedJointSystem>();
+        var map = sim.CreateMap();
+
+        var grid = maps.CreateGridEntity(map.MapId);
+        var wall = maps.CreateGridEntity(map.MapId);
+        maps.SetTile(grid, Vector2i.Zero, new Tile(1));
+        maps.SetTile(wall, Vector2i.Zero, new Tile(1));
+        transforms.SetLocalPosition(wall, new Vector2(3, 0));
+        physics.SetBodyType(grid, BodyType.Dynamic);
+        physics.SetLinearVelocity(grid, new Vector2(240, 0));
+
+        Entity<PhysicsComponent> BodyAt(float x, float speed)
+        {
+            var uid = entities.SpawnEntity(null, new MapCoordinates(x, 0, map.MapId));
+            var body = entities.AddComponent<PhysicsComponent>(uid);
+            entities.System<FixtureSystem>().CreateFixture(uid, "body",
+                new Fixture(new PhysShapeCircle(0.1f), 1, 1, true), body: body);
+            physics.SetBodyType(uid, BodyType.Dynamic, body: body);
+            physics.SetLinearVelocity(uid, new Vector2(speed, 0), body: body);
+            return (uid, body);
+        }
+
+        // The joint endpoint is outside the spatial search around the collision.
+        var coupled = BodyAt(-80, 240);
+        var impact = entities.System<AttachOnImpact>();
+        if (attachDuringCollision)
+        {
+            impact.Grid = grid;
+            impact.Peer = coupled;
+        }
+        else
+        {
+            joints.CreateDistanceJoint(grid, coupled);
+            joints.Update(1f / 30);
+        }
+
+        var distant = BodyAt(100, 12);
+        physics.SetLinearDamping(distant, distant.Comp, 6);
+
+        physics.Update(1f / 30);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(transforms.GetWorldPosition(grid).X, Is.LessThan(2.2f), "The fast hull should stop at the wall.");
+            Assert.That(coupled.Comp.LinearVelocity.X, Is.LessThan(20), "The wall impulse should reach the distant joint endpoint.");
+            Assert.That(impact.CreatedJoint, Is.EqualTo(attachDuringCollision));
+            Assert.That(distant.Comp.LinearVelocity.X, Is.EqualTo(12 * 0.9f * 0.9f).Within(1e-5),
+                "A late join must leave independent bodies at their ordinary cadence.");
+            Assert.That(transforms.GetWorldPosition(distant).X, Is.EqualTo(100.342f).Within(1e-3),
+                "An independent body must advance for the full tick.");
+        });
+    }
+
+    private sealed class AttachOnImpact : EntitySystem
+    {
+        [Dependency] private SharedJointSystem _joints = default!;
+
+        public EntityUid Grid;
+        public EntityUid Peer;
+        public bool CreatedJoint;
+
+        public override void Initialize()
+        {
+            SubscribeLocalEvent<PhysicsComponent, StartCollideEvent>(OnStartCollide);
+        }
+
+        private void OnStartCollide(Entity<PhysicsComponent> entity, ref StartCollideEvent ev)
+        {
+            if (entity.Owner != Grid || CreatedJoint)
+                return;
+
+            CreatedJoint = true;
+            _joints.CreateDistanceJoint(Grid, Peer);
+            _joints.Update(0);
+        }
+    }
+
+    [Test]
+    public void FastGridContactCanJoinAfterTheFirstSubstep()
+    {
+        var sim = RobustServerSimulation.NewSimulation().InitializeInstance();
+        var entities = sim.Resolve<IEntityManager>();
+        var cfg = sim.Resolve<IConfigurationManager>();
+        cfg.SetCVar(CVars.NetTickrate, 30);
+        cfg.SetCVar(CVars.TargetMinimumTickrate, 60);
+        var maps = entities.System<SharedMapSystem>();
+        var physics = entities.System<SharedPhysicsSystem>();
+        var transforms = entities.System<SharedTransformSystem>();
+        var map = sim.CreateMap();
+
+        EntityUid GridAt(float x)
+        {
+            var grid = maps.CreateGridEntity(map.MapId);
+            maps.SetTile(grid, Vector2i.Zero, new Tile(1));
+            transforms.SetLocalPosition(grid, new Vector2(x, 0));
+            return grid;
+        }
+
+        var fast = GridAt(0);
+        GridAt(5); // This wall requests the initial fine steps.
+        var late = GridAt(80);
+        physics.SetBodyType(fast, BodyType.Dynamic);
+        physics.SetBodyType(late, BodyType.Dynamic);
+        physics.SetLinearVelocity(fast, new Vector2(240, 0));
+
+        var distant = entities.SpawnEntity(null, new MapCoordinates(200, 0, map.MapId));
+        var distantBody = entities.AddComponent<PhysicsComponent>(distant);
+        entities.System<FixtureSystem>().CreateFixture(distant, "body",
+            new Fixture(new PhysShapeCircle(0.1f), 1, 1, true), body: distantBody);
+        physics.SetBodyType(distant, BodyType.Dynamic, body: distantBody);
+        physics.SetLinearDamping(distant, distantBody, 6);
+        physics.SetLinearVelocity(distant, new Vector2(12, 0), body: distantBody);
+
+        var inserted = false;
+        void OnMove(ref MoveEvent ev)
+        {
+            if (ev.Sender != fast || inserted)
+                return;
+
+            inserted = true;
+            transforms.SetLocalPosition(late, new Vector2(2.5f, 0));
+        }
+
+        transforms.OnGlobalMoveEvent += OnMove;
+        try
+        {
+            physics.Update(1f / 30);
+        }
+        finally
+        {
+            transforms.OnGlobalMoveEvent -= OnMove;
+        }
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(inserted, Is.True);
+            Assert.That(transforms.GetWorldPosition(late).X, Is.GreaterThan(2.6f),
+                "The late grid should receive an impulse from the fast grid.");
+            Assert.That(transforms.GetWorldPosition(fast).X, Is.LessThan(transforms.GetWorldPosition(late).X),
+                "The fast grid must stay on the near side of the new contact.");
+            Assert.That(distantBody.LinearVelocity.X, Is.EqualTo(12 * 0.9f * 0.9f).Within(1e-5),
+                "Late contacts must leave unrelated bodies at the ordinary cadence.");
+        });
+    }
+
     [TestCase(false)]
     [TestCase(true)]
     public void DistantFastBodyDoesNotAmplifyNearbySlowCollision(bool differentMap)
@@ -86,6 +310,35 @@ public sealed class GridMotionSubstepTests
             Assert.That(steps, Is.EqualTo(2), "A receding body cannot hit the hull during this tick.");
         else
             Assert.That(steps, Is.GreaterThanOrEqualTo((int) MathF.Ceiling((speed + 1) / 30 / 0.5f)));
+    }
+
+    [TestCase(-1f, false)]
+    [TestCase(-4f, true)]
+    public void DiagonalSweepOnlySubstepsForSimultaneousOverlap(float startY, bool crossesGrid)
+    {
+        var sim = RobustServerSimulation.NewSimulation().InitializeInstance();
+        var entities = sim.Resolve<IEntityManager>();
+        var cfg = sim.Resolve<IConfigurationManager>();
+        cfg.SetCVar(CVars.NetTickrate, 30);
+        cfg.SetCVar(CVars.TargetMinimumTickrate, 60);
+        var maps = entities.System<SharedMapSystem>();
+        var physics = entities.System<SharedPhysicsSystem>();
+        var map = sim.CreateMap();
+        var grid = maps.CreateGridEntity(map.MapId);
+        maps.SetTile(grid, Vector2i.Zero, new Tile(1));
+        physics.SetBodyType(grid, BodyType.Dynamic);
+        physics.SetLinearVelocity(grid, -Vector2.UnitX);
+
+        var debris = entities.SpawnEntity(null, new MapCoordinates(new Vector2(-4, startY), map.MapId));
+        var body = entities.AddComponent<PhysicsComponent>(debris);
+        entities.System<FixtureSystem>().CreateFixture(debris, "body",
+            new Fixture(new PhysShapeCircle(0.1f), 1, 1, true), body: body);
+        physics.SetBodyType(debris, BodyType.Dynamic, body: body);
+        physics.SetLinearVelocity(debris, new Vector2(200, 200), body: body);
+
+        var method = typeof(SharedPhysicsSystem).GetMethod("GetGridMotionSubsteps", BindingFlags.Instance | BindingFlags.NonPublic)!;
+        var steps = (int) method.Invoke(physics, new object[] { 1f / 30, false })!;
+        Assert.That(steps, crossesGrid ? Is.GreaterThan(2) : Is.EqualTo(2));
     }
 
     [TestCase(false)]

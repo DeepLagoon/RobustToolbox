@@ -498,17 +498,7 @@ public sealed partial class EntityLookupSystem : EntitySystem
             for (var i = 0; i < fixture.ProxyCount; i++)
             {
                 var bounds = fixture.Shape.ComputeAABB(broadphaseTransform, i);
-                var proxy = fixture.Proxies[i];
-                DebugTools.Assert(ReferenceEquals(tree.GetProxy(proxy.ProxyId), proxy),
-                    "Moving a fixture proxy in a tree that does not own it.");
-                // Only move if the fat AABB changes. Saves array lookup + change.
-                if (!proxy.AABB.Equals(bounds))
-                {
-                    tree.MoveProxy(proxy.ProxyId, bounds);
-                    proxy.AABB = bounds;
-                }
-
-                moveBuffer.Add(proxy);
+                MoveFixtureProxy(tree, fixture.Proxies[i], bounds);
             }
 
             return;
@@ -530,6 +520,19 @@ public sealed partial class EntityLookupSystem : EntitySystem
         fixture.Proxies = proxies;
         fixture.ProxyCount = count;
         fixture.ProxyTree = tree;
+    }
+
+    private void MoveFixtureProxy(IBroadPhase tree, FixtureProxy proxy, in Box2 bounds)
+    {
+        DebugTools.Assert(ReferenceEquals(tree.GetProxy(proxy.ProxyId), proxy),
+            "Moving a fixture proxy in a tree that does not own it.");
+        if (!proxy.AABB.Equals(bounds))
+        {
+            tree.MoveProxy(proxy.ProxyId, bounds);
+            proxy.AABB = bounds;
+        }
+
+        _physics.MoveBuffer.Add(proxy);
     }
 
     private void AddOrUpdateSundriesTree(EntityUid broadUid, BroadphaseComponent broadphase, EntityUid uid, TransformComponent xform, bool staticBody, Box2? aabb = null)
@@ -802,6 +805,20 @@ public sealed partial class EntityLookupSystem : EntitySystem
         TransformComponent xform,
         bool recursive = true)
     {
+        // Physics updates mostly move leaf entities directly on a grid or map. Their local
+        // transform is already in the broadphase's coordinate system.
+        if (xform.Broadphase is { Valid: true, CanCollide: true } &&
+            xform.ParentUid == broadUid && xform.GridUid == broadUid && (!recursive || xform.ChildCount == 0) &&
+            _physicsQuery.TryGetComponent(uid, out var body) && body.CanCollide)
+        {
+            var tree = body.BodyType == BodyType.Static ? broadphase.StaticTree : broadphase.DynamicTree;
+            var fixtures = _fixturesQuery.GetComponent(uid);
+            if (_preparedFixtureMoveIndex < 0 || !TryApplyPreparedFixtureBounds(uid, xform, fixtures, tree))
+                AddOrUpdatePhysicsTree(uid, broadUid, xform, body, fixtures, tree,
+                    new Transform(xform.LocalPosition, xform.LocalRotation));
+            return;
+        }
+
         var (worldPos, worldRot) = _transform.GetWorldPositionRotation(xform);
         AddOrUpdateEntityTreeDown(
             broadUid,
