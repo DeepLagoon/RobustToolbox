@@ -5,7 +5,6 @@ using System.Linq;
 using System.Reflection;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
-using Robust.Shared.Collections;
 using Robust.Shared.Reflection;
 using Robust.Shared.Utility;
 
@@ -642,63 +641,59 @@ namespace Robust.Shared.GameObjects
             }
         }
 
-        private void EntCollectOrdered(
+        private EventTable? EntCollectOrdered(
             EntityUid euid,
             Type eventType,
-            ref ValueList<OrderedEventDispatch> found)
+            List<OrderedEventDispatch> found)
         {
             if (!_entEventTables.TryGetValue(euid, out var eventTable))
-                return;
+                return null;
 
             if (!eventTable.EventIndices.TryGetValue(eventType, out var indices))
-                return;
+                return null;
 
             DebugTools.Assert(indices.Count > 0);
             DebugTools.Assert(indices.Start >= 0);
-            var version = eventTable.Version;
-            var idx = indices.Start;
-            while (idx != -1)
+
+            for (var idx = indices.Start; idx != -1;)
             {
-                var entryIdx = idx;
                 ref var entry = ref eventTable.ComponentLists[idx];
+                var reg = _eventSubs[entry.Component.Value][eventType];
+                found.Add(new OrderedEventDispatch(reg, new EventTableDispatchEntry(entry.Component, idx)));
                 idx = entry.Next;
-                var comp = entry.ComponentInstance;
-                var compIdx = entry.Component;
-                var compSubs = _eventSubs[compIdx.Value];
-                var reg = compSubs[eventType];
+            }
 
-                found.Add(new OrderedEventDispatch(
-                    (ref Unit ev) =>
-                    {
-                        var dispatchComp = comp;
-                        if (eventTable.Version != version)
-                        {
-                            if (!_entMan.TryGetComponent(euid, compIdx, out dispatchComp))
-                                return;
-                        }
-                        else
-                        {
-                            dispatchComp = eventTable.ComponentLists[entryIdx].ComponentInstance;
-                        }
+            return eventTable;
+        }
 
-                        if (dispatchComp.Deleted)
-                            return;
+        private void DispatchOrderedComponent(
+            EntityUid uid,
+            EventTable eventTable,
+            int version,
+            in OrderedEventDispatch dispatch,
+            ref Unit args)
+        {
+            IComponent? component;
+            if (eventTable.Version == version)
+                component = eventTable.ComponentLists[dispatch.Entry.Entry].ComponentInstance;
+            else if (!_entMan.TryGetComponent(uid, dispatch.Entry.Component, out component))
+                return;
+
+            if (component.Deleted)
+                return;
 
 #if DEBUG
-                        eventTable.DirectedDispatchDepth++;
+            eventTable.DirectedDispatchDepth++;
 #endif
-                        try
-                        {
-                            reg.Handler(euid, dispatchComp, ref ev);
-                        }
-                        finally
-                        {
+            try
+            {
+                ((DirectedRegistration) dispatch.Registration).Handler(uid, component, ref args);
+            }
+            finally
+            {
 #if DEBUG
-                            eventTable.DirectedDispatchDepth--;
+                eventTable.DirectedDispatchDepth--;
 #endif
-                        }
-                    },
-                    reg.Order));
             }
         }
 

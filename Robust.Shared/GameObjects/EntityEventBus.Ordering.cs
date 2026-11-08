@@ -1,24 +1,19 @@
 ﻿using System;
 using System.Collections.Generic;
 using System.Linq;
-using Robust.Shared.Collections;
+using System.Runtime.InteropServices;
+using Microsoft.Extensions.ObjectPool;
 using Robust.Shared.Utility;
 
 namespace Robust.Shared.GameObjects
 {
     internal partial class EntityEventBus
     {
-        private static void CollectBroadcastOrdered(
-            EventSource source,
-            EventData sub,
-            ref ValueList<OrderedEventDispatch> found)
-        {
-            foreach (var handler in sub.BroadcastRegistrations.Span)
-            {
-                if ((handler.Mask & source) != 0)
-                    found.Add(new OrderedEventDispatch(handler.Handler, handler.Order));
-            }
-        }
+        private static readonly Comparison<OrderedEventDispatch> CompareOrderedDispatch =
+            static (x, y) => x.Registration.Order.CompareTo(y.Registration.Order);
+
+        private readonly DefaultObjectPool<List<OrderedEventDispatch>> _orderedDispatchPool =
+            new(new ListPolicy<OrderedEventDispatch>());
 
         private void RaiseLocalOrdered(
             EntityUid uid,
@@ -30,26 +25,35 @@ namespace Robust.Shared.GameObjects
             if (!subs.OrderingUpToDate)
                 UpdateOrderSeq(eventType, subs);
 
-            var found = new ValueList<OrderedEventDispatch>();
-
-            if (broadcast)
-                CollectBroadcastOrdered(EventSource.Local, subs, ref found);
-
-            // TODO PERF
-            // consider ordering the linked list itself?
-            // Then make broadcast events always a lower priority and replace the valuelist with stackalloc?
-            EntCollectOrdered(uid, eventType, ref found);
-
-            DispatchOrderedEvents(ref unitRef, ref found);
-        }
-
-        private static void DispatchOrderedEvents(ref Unit eventArgs, ref ValueList<OrderedEventDispatch> found)
-        {
-            found.Sort(OrderedEventDispatchComparer.Instance);
-
-            foreach (var (handler, _) in found.Span)
+            // Keep a separate list for each dispatch because handlers can raise other ordered events.
+            var found = _orderedDispatchPool.Get();
+            try
             {
-                handler(ref eventArgs);
+                if (broadcast)
+                {
+                    foreach (var handler in subs.BroadcastRegistrations.Span)
+                    {
+                        if ((handler.Mask & EventSource.Local) != 0)
+                            found.Add(new OrderedEventDispatch(handler));
+                    }
+                }
+
+                var eventTable = EntCollectOrdered(uid, eventType, found);
+                var version = eventTable?.Version ?? 0;
+                var handlers = CollectionsMarshal.AsSpan(found);
+                handlers.Sort(CompareOrderedDispatch);
+
+                foreach (ref readonly var dispatch in handlers)
+                {
+                    if (dispatch.Registration is BroadcastRegistration registration)
+                        registration.Handler(ref unitRef);
+                    else
+                        DispatchOrderedComponent(uid, eventTable!, version, dispatch, ref unitRef);
+                }
+            }
+            finally
+            {
+                _orderedDispatchPool.Return(found);
             }
         }
 
@@ -157,17 +161,7 @@ namespace Robust.Shared.GameObjects
             }
         }
 
-        private record struct OrderedEventDispatch(RefEventHandler Handler, int Order);
-
-        private sealed class OrderedEventDispatchComparer : IComparer<OrderedEventDispatch>
-        {
-            public static readonly OrderedEventDispatchComparer Instance = new();
-
-            public int Compare(OrderedEventDispatch x, OrderedEventDispatch y)
-            {
-                return x.Order.CompareTo(y.Order);
-            }
-        }
+        private readonly record struct OrderedEventDispatch(OrderedRegistration Registration, EventTableDispatchEntry Entry = default);
 
         /// <summary>
         /// Base type for directed and broadcast subscriptions. Contains ordering data.
