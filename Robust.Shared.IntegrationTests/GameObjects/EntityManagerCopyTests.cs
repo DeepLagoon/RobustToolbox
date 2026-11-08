@@ -165,7 +165,7 @@ internal sealed partial class EntityManagerCopyTests
         var target = new ContainerManagerComponent();
         IComponent copy = target;
 
-        serialization.CopyTo<IComponent>(source, ref copy);
+        serialization.CopyTo<IComponent>(source, ref copy, notNullableOverride: true);
 
         Assert.That(copy, Is.SameAs(target));
         var copiedContainer = target.Containers["cargo"];
