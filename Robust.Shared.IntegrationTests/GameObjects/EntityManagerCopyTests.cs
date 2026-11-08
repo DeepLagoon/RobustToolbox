@@ -1,7 +1,9 @@
 using System.Numerics;
 using NUnit.Framework;
+using Robust.Shared.Containers;
 using Robust.Shared.GameObjects;
 using Robust.Shared.Map;
+using Robust.Shared.Serialization.Manager;
 using Robust.Shared.Serialization.Manager.Attributes;
 using Robust.UnitTesting.Server;
 
@@ -150,6 +152,25 @@ internal sealed partial class EntityManagerCopyTests
 
         Assert.That(!ReferenceEquals(comp, targetComp));
         Assert.That(!ReferenceEquals(comp2, targetComp2));
+    }
+
+    [Test]
+    public void CopyThroughComponentInterfacePreservesTargetAndRunsHook()
+    {
+        var sim = RobustServerSimulation.NewSimulation().InitializeInstance();
+        var serialization = sim.Resolve<ISerializationManager>();
+        var source = new ContainerManagerComponent();
+        var cargo = new Container();
+        source.Containers.Add("cargo", cargo);
+        var target = new ContainerManagerComponent();
+        IComponent copy = target;
+
+        serialization.CopyTo<IComponent>(source, ref copy);
+
+        Assert.That(copy, Is.SameAs(target));
+        var copiedContainer = target.Containers["cargo"];
+        Assert.That(copiedContainer, Is.Not.SameAs(cargo));
+        Assert.That(copiedContainer.ID, Is.EqualTo("cargo"));
     }
 
     [DataDefinition]
