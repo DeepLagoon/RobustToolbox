@@ -285,6 +285,8 @@ public abstract partial class SharedPhysicsSystem
         var bodB = contact.BodyB!;
 
         // Insert into world
+        if (_activeContacts.Last?.Value is { } previous)
+            previous.NextActiveContact = contact;
         _activeContacts.AddLast(contact.MapNode);
 
         // Connect to body A
@@ -376,6 +378,9 @@ public abstract partial class SharedPhysicsSystem
         next = node?.Next;
 
         // Remove from the world
+        if (contact.MapNode.Previous?.Value is { } previous)
+            previous.NextActiveContact = contact.NextActiveContact;
+        contact.NextActiveContact = null;
         _activeContacts.Remove(contact.MapNode);
 
         // Remove from body 1
@@ -394,42 +399,38 @@ public abstract partial class SharedPhysicsSystem
         _contactPool.Return(contact);
     }
 
-    internal void CollideContacts()
+    internal void CollideContacts() => CollideContacts(default);
+
+    private bool CollideContacts(SubstepScope scope)
     {
         // Due to the fact some contacts may be removed (and we need to update this array as we iterate).
         // the length may not match the actual contact count, hence we track the index.
         var contacts = ArrayPool<Contact>.Shared.Rent(ContactCount);
         var index = 0;
+        var callbacksRan = false;
 
-        // Can be changed while enumerating
-        // TODO: check for null instead?
-        // Work out which contacts are still valid before we decide to update manifolds.
-        var node = _activeContacts.First;
-
-        while (node != null)
+        var nextContact = _activeContacts.First?.Value;
+        while (nextContact != null)
         {
-            var contact = node.Value;
-            node = node.Next;
+            var contact = nextContact;
+            // Capture the successor before callbacks, as with the world list.
+            nextContact = contact.NextActiveContact;
 
-            // It's possible the contact was destroyed by content in which case we just skip it.
-            if (!contact.Enabled)
+            if (!contact.Enabled || !scope.Includes(contact))
                 continue;
 
-            // No longer pre-init and can be used in the solver.
-            contact.Flags &= ~ContactFlags.PreInit;
-            Fixture fixtureA = contact.FixtureA!;
-            Fixture fixtureB = contact.FixtureB!;
-            int indexA = contact.ChildIndexA;
-            int indexB = contact.ChildIndexB;
+            var flags = contact.Flags;
+            // A newly validated contact can now participate in the solver.
+            if ((flags & ContactFlags.PreInit) != 0)
+                contact.Flags = flags &= ~ContactFlags.PreInit;
 
             var bodyA = contact.BodyA!;
             var bodyB = contact.BodyB!;
-            var uidA = contact.EntityA;
-            var uidB = contact.EntityB;
 
             // Do not try to collide disabled bodies
             if (!bodyA.CanCollide || !bodyB.CanCollide)
             {
+                callbacksRan = true;
                 DestroyContact(contact);
                 continue;
             }
@@ -439,38 +440,46 @@ public abstract partial class SharedPhysicsSystem
 
             if (xformA.MapID == MapId.Nullspace || xformB.MapID == MapId.Nullspace)
             {
+                callbacksRan = true;
                 DestroyContact(contact);
                 continue;
             }
 
-            // Is this contact flagged for filtering?
-            if ((contact.Flags & ContactFlags.Filter) != 0x0)
+            // Dormant pairs still need the validity checks above. Only filtered pairs can
+            // wake while being processed, so the others can skip fetching fixtures and IDs.
+            var needsFilter = (flags & ContactFlags.Filter) != 0;
+            if (!needsFilter && !HasAwakeContactBody(bodyA, bodyB))
+                continue;
+
+            var fixtureA = contact.FixtureA!;
+            var fixtureB = contact.FixtureB!;
+            var indexA = contact.ChildIndexA;
+            var indexB = contact.ChildIndexB;
+            var uidA = contact.EntityA;
+            var uidB = contact.EntityB;
+
+            if (needsFilter)
             {
-                // Check default filtering
+                // Filtering can raise PreventCollideEvent.
+                callbacksRan = true;
                 if (!ShouldCollide(fixtureA, fixtureB) ||
                     !ShouldCollideSlow(uidA, uidB, bodyA, bodyB, fixtureA, fixtureB, xformA, xformB) ||
                     !ShouldCollideJoints(uidA, uidB))
                 {
+                    callbacksRan = true;
                     DestroyContact(contact);
                     continue;
                 }
 
                 // Clear the filtering flag.
                 contact.Flags &= ~ContactFlags.Filter;
+                if (!HasAwakeContactBody(bodyA, bodyB))
+                    continue;
             }
-
-            bool activeA = bodyA.Awake && bodyA.BodyType != BodyType.Static;
-            bool activeB = bodyB.Awake && bodyB.BodyType != BodyType.Static;
-
-            // At least one body must be awake and it must be dynamic or kinematic.
-            if (activeA == false && activeB == false)
-            {
-                continue;
-            }
-
 
             if (xformA.MapUid == null || xformA.MapUid != xformB.MapUid)
             {
+                callbacksRan = true;
                 DestroyContact(contact);
                 continue;
             }
@@ -483,6 +492,7 @@ public abstract partial class SharedPhysicsSystem
 
                 if (!gridABounds.Intersects(gridBBounds))
                 {
+                    callbacksRan = true;
                     DestroyContact(contact);
                 }
                 else
@@ -499,30 +509,32 @@ public abstract partial class SharedPhysicsSystem
                 continue;
             }
 
-            if (indexA >= fixtureA.Proxies.Length)
+            var proxiesA = fixtureA.Proxies;
+            if (indexA >= proxiesA.Length)
             {
-                Log.Error($"Found invalid contact index of {indexA} on {contact.FixtureAId} / {ToPrettyString(uidA)}, expected {fixtureA.Proxies.Length}");
+                Log.Error($"Found invalid contact index of {indexA} on {contact.FixtureAId} / {ToPrettyString(uidA)}, expected {proxiesA.Length}");
+                callbacksRan = true;
                 DestroyContact(contact);
                 continue;
             }
 
-            if (indexB >= fixtureB.Proxies.Length)
+            var proxiesB = fixtureB.Proxies;
+            if (indexB >= proxiesB.Length)
             {
-                Log.Error($"Found invalid contact index of {indexB} on {contact.FixtureBId} / {ToPrettyString(uidB)}, expected {fixtureB.Proxies.Length}");
+                Log.Error($"Found invalid contact index of {indexB} on {contact.FixtureBId} / {ToPrettyString(uidB)}, expected {proxiesB.Length}");
+                callbacksRan = true;
                 DestroyContact(contact);
                 continue;
             }
 
-            var proxyA = fixtureA.Proxies[indexA];
-            var proxyB = fixtureB.Proxies[indexB];
-            var broadphaseA = xformA.Broadphase?.Uid;
-            var broadphaseB = xformB.Broadphase?.Uid;
+            var proxyA = proxiesA[indexA];
+            var proxyB = proxiesB[indexB];
             var overlap = false;
 
             // We can have cross-broadphase proxies hence need to change them to worldspace
-            if (broadphaseA != null && broadphaseB != null)
+            if (xformA.Broadphase is { } broadphaseA && xformB.Broadphase is { } broadphaseB)
             {
-                if (broadphaseA == broadphaseB)
+                if (broadphaseA.Uid == broadphaseB.Uid)
                 {
                     overlap = proxyA.AABB.Intersects(proxyB.AABB);
                 }
@@ -532,8 +544,8 @@ public abstract partial class SharedPhysicsSystem
                     // Instead of transforming both boxes (which enlarges both aabbs), maybe just transform one box.
                     // I.e. use (matrixA * invMatrixB).TransformBox(). Or (invMatrixB * matrixA), whichever is correct.
                     // Alternatively, maybe just directly construct the relative transform matrix?
-                    var proxyAWorldAABB = _transform.GetWorldMatrix(XformQuery.GetComponent(broadphaseA.Value)).TransformBox(proxyA.AABB);
-                    var proxyBWorldAABB = _transform.GetWorldMatrix(XformQuery.GetComponent(broadphaseB.Value)).TransformBox(proxyB.AABB);
+                    var proxyAWorldAABB = _transform.GetWorldMatrix(XformQuery.GetComponent(broadphaseA.Uid)).TransformBox(proxyA.AABB);
+                    var proxyBWorldAABB = _transform.GetWorldMatrix(XformQuery.GetComponent(broadphaseB.Uid)).TransformBox(proxyB.AABB);
                     overlap = proxyAWorldAABB.Intersects(proxyBWorldAABB);
                 }
             }
@@ -541,6 +553,7 @@ public abstract partial class SharedPhysicsSystem
             // Here we destroy contacts that cease to overlap in the broad-phase.
             if (!overlap)
             {
+                callbacksRan = true;
                 DestroyContact(contact);
                 continue;
             }
@@ -560,16 +573,14 @@ public abstract partial class SharedPhysicsSystem
         var worldPoints = ArrayPool<FixedArray4<Vector2>>.Shared.Rent(index);
 
         // Update contacts all at once.
-        BuildManifolds(contacts, index, status, worldPoints);
+        callbacksRan |= BuildManifolds(contacts, index, status, worldPoints);
 
         // Single-threaded so content doesn't need to worry about race conditions.
         for (var i = 0; i < index; i++)
         {
-            if (i >= contacts.Length)
-            {
-                Log.Error($"Invalid contact length for contact events!");
+            var contactStatus = status[i];
+            if (contactStatus is ContactStatus.Touching or ContactStatus.NoContact)
                 continue;
-            }
 
             var contact = contacts[i];
 
@@ -579,12 +590,20 @@ public abstract partial class SharedPhysicsSystem
                 continue;
             }
 
-            RunContactEvents(status[i], contact, worldPoints[i]);
+            callbacksRan = true;
+            RunContactEvents(contactStatus, contact, worldPoints[i]);
         }
 
         ArrayPool<Contact>.Shared.Return(contacts);
         ArrayPool<ContactStatus>.Shared.Return(status);
         ArrayPool<FixedArray4<Vector2>>.Shared.Return(worldPoints);
+        return callbacksRan;
+    }
+
+    private static bool HasAwakeContactBody(PhysicsComponent bodyA, PhysicsComponent bodyB)
+    {
+        return (bodyA.Awake && bodyA.BodyType != BodyType.Static) ||
+               (bodyB.Awake && bodyB.BodyType != BodyType.Static);
     }
 
     internal void RunContactEvents(ContactStatus status, Contact contact, FixedArray4<Vector2> worldPoint)
@@ -641,10 +660,10 @@ public abstract partial class SharedPhysicsSystem
         }
     }
 
-    private void BuildManifolds(Contact[] contacts, int count, ContactStatus[] status, FixedArray4<Vector2>[] worldPoints)
+    private bool BuildManifolds(Contact[] contacts, int count, ContactStatus[] status, FixedArray4<Vector2>[] worldPoints)
     {
         if (count == 0)
-            return;
+            return false;
 
         using var _mz = _prof.Group("Generate Manifolds");
         var wake = ArrayPool<bool>.Shared.Rent(count);
@@ -659,6 +678,7 @@ public abstract partial class SharedPhysicsSystem
         }, count);
 
         // Can't do this during UpdateContacts due to IoC threading issues.
+        var wokeBody = false;
         for (var i = 0; i < count; i++)
         {
             var shouldWake = wake[i];
@@ -670,14 +690,16 @@ public abstract partial class SharedPhysicsSystem
             var aUid = contact.EntityA;
             var bUid = contact.EntityB;
 
+            wokeBody |= !bodyA.Awake || !bodyB.Awake;
             SetAwake((aUid, bodyA), true);
             SetAwake((bUid, bodyB), true);
         }
 
         ArrayPool<bool>.Shared.Return(wake);
+        return wokeBody;
     }
 
-    private record struct ManifoldsJob : IParallelRobustJob
+    private record struct ManifoldsJob : IParallelBulkRobustJob
     {
         public int BatchSize => ContactsPerThread;
 
@@ -688,13 +710,26 @@ public abstract partial class SharedPhysicsSystem
         public FixedArray4<Vector2>[] WorldPoints;
         public bool[] Wake;
 
-        public void Execute(int index)
+        public void ExecuteRange(int startIndex, int endIndex)
         {
-            Physics.UpdateContact(Contacts, index, Status, Wake, WorldPoints);
+            // A body can appear in many pairs. During this job its world pose is read-only.
+            Span<CachedPhysicsPose<Transform>> poses = stackalloc CachedPhysicsPose<Transform>[PhysicsPoseCacheSize];
+            poses.Clear();
+            for (var i = startIndex; i < endIndex; i++)
+                Physics.UpdateContact(Contacts, i, Status, Wake, WorldPoints, poses);
         }
     }
 
-    private void UpdateContact(Contact[] contacts, int index, ContactStatus[] status, bool[] wake, FixedArray4<Vector2>[] worldPoints)
+    private Transform GetContactPose(EntityUid uid, Span<CachedPhysicsPose<Transform>> poses)
+    {
+        ref var cached = ref poses[uid.Id & (PhysicsPoseCacheSize - 1)];
+        if (cached.Entity != uid || uid == EntityUid.Invalid)
+            cached = new(uid, GetPhysicsTransform(uid));
+        return cached.Value;
+    }
+
+    private void UpdateContact(Contact[] contacts, int index, ContactStatus[] status, bool[] wake,
+        FixedArray4<Vector2>[] worldPoints, Span<CachedPhysicsPose<Transform>> poses)
     {
         var contact = contacts[index];
 
@@ -709,10 +744,8 @@ public abstract partial class SharedPhysicsSystem
             return;
         }
 
-        var uidA = contact.EntityA;
-        var uidB = contact.EntityB;
-        var bodyATransform = GetPhysicsTransform(uidA);
-        var bodyBTransform = GetPhysicsTransform(uidB);
+        var bodyATransform = GetContactPose(contact.EntityA, poses);
+        var bodyBTransform = GetContactPose(contact.EntityB, poses);
 
         var contactStatus = contact.Update(bodyATransform, bodyBTransform, out wake[index]);
         status[index] = contactStatus;

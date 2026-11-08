@@ -47,6 +47,9 @@ public sealed partial class PhysicsComponent : Component, IComponentDelta
     [Access(typeof(SharedPhysicsSystem))]
     public bool Island;
 
+    // Server solver bookkeeping. Each island can advance at a different cadence.
+    internal float PreviousInvDt;
+
     /// <summary>
     ///     Store the body's index within the island so we can lookup its data.
     ///     Key is Island's ID and value is our index.

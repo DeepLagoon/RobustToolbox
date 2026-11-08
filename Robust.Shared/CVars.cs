@@ -1548,6 +1548,18 @@ namespace Robust.Shared
         public static readonly CVarDef<bool> WarmStarting =
             CVarDef.Create("physics.warmstart", true);
 
+        /// <summary>
+        /// Run additional grid collision steps only for the affected bodies on the server.
+        /// </summary>
+        public static readonly CVarDef<bool> LocalGridSubsteps =
+            CVarDef.Create("physics.local_grid_substeps", true, CVar.SERVERONLY);
+
+        /// <summary>
+        /// Precompute bounds for eligible grid-local fixtures in the server's solver jobs.
+        /// </summary>
+        public static readonly CVarDef<bool> PrepareFixtureMoves =
+            CVarDef.Create("physics.prepare_fixture_moves", false, CVar.SERVERONLY);
+
         public static readonly CVarDef<bool> AutoClearForces =
             CVarDef.Create("physics.autoclearforces", true);
 

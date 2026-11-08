@@ -205,7 +205,7 @@ namespace Robust.Shared.Physics.Systems
             // Handle grids first as they're not stored on map broadphase at all.
             HandleGridCollisions(movedGrids);
 
-            // EZ
+            movedGrids.Clear();
             if (moveBuffer.Count == 0)
                 return;
 
@@ -246,7 +246,6 @@ namespace Robust.Shared.Physics.Systems
             }
 
             moveBuffer.Clear();
-            movedGrids.Clear();
         }
 
         private void HandleGridCollisions(HashSet<EntityUid> movedGrids)

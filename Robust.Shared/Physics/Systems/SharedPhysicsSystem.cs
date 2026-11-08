@@ -256,25 +256,27 @@ namespace Robust.Shared.Physics.Systems
         protected void SimulateWorld(float deltaTime, bool prediction)
         {
             var substeps = GetGridMotionSubsteps(deltaTime, prediction);
+            _prof.WriteValue("Initial physics substeps", substeps);
+            if (substeps > Math.Max(1, _substeps) && _netMan.IsServer && _cfg.GetCVar(CVars.LocalGridSubsteps))
+            {
+                SimulateLocalGridSubsteps(deltaTime);
+                return;
+            }
+
             var frameTime = deltaTime / substeps;
+            var adaptive = substeps > Math.Max(1, _substeps);
+            var stepsSinceEstimate = 0;
 
             EffectiveCurTime = _gameTiming.CurTime;
-            for (int i = 0; i < substeps; i++)
+            for (var remainingSteps = substeps; remainingSteps > 0; remainingSteps--)
             {
-                var updateBeforeSolve = new PhysicsUpdateBeforeSolveEvent(prediction, frameTime);
-                using (_prof.Group("PreSolve", Color.Green))
-                {
-                    RaiseLocalEvent(ref updateBeforeSolve);
-                }
+                BeforePhysicsStep(prediction, frameTime);
 
                 // Find new contacts and (TODO: temporary) update any per-map virtual controllers
 
                 // Box2D does this at the end of a step and also here when there's a fixture update.
                 // Given external stuff can move bodies we'll just do this here.
-                using (_prof.Group("Broadphase", Color.Cyan))
-                {
-                    _broadphase.FindNewContacts();
-                }
+                FindPhysicsContacts();
 
                 // TODO PHYSICS Fix Collision Mispredicts
                 // If a physics update induces a position update that brings fixtures into contact, the collision starts in the NEXT tick,
@@ -298,32 +300,72 @@ namespace Robust.Shared.Physics.Systems
                 // of to fix this would be to always call `CollideContacts` again at the very end of a physics update.
                 // But that might be unnecessarily expensive for what are hopefully only infrequent mispredicts.
 
-                using (_prof.Group("Collide", Color.Orange))
-                {
-                    CollideContacts();
-                }
-
-                using (_prof.Group("Solve", Color.Red))
-                {
-                    Step(frameTime, prediction);
-                }
-
-                var updateAfterSolve = new PhysicsUpdateAfterSolveEvent(prediction, frameTime);
-                using (_prof.Group("PostSolve", Color.Yellow))
-                {
-                    RaiseLocalEvent(ref updateAfterSolve);
-                }
+                SolvePhysicsStep(prediction, frameTime);
+                AfterPhysicsStep(prediction, frameTime);
 
                 // On last substep (or main step where no substeps occured) we'll update all of the lerp data.
-                if (i == substeps - 1)
+                if (remainingSteps == 1)
                 {
                     FinalStep();
                 }
 
                 EffectiveCurTime = EffectiveCurTime.Value + TimeSpan.FromSeconds(frameTime);
+
+                // A fast fragment may stop on contact. Re-estimate the unprocessed time
+                // instead of making the whole world use the initial step size to the end of the tick.
+                if (adaptive && remainingSteps > 3 && ++stepsSinceEstimate == 4)
+                {
+                    stepsSinceEstimate = 0;
+                    var timeLeft = frameTime * (remainingSteps - 1);
+                    var revised = GetGridMotionSubsteps(timeLeft, prediction);
+                    if (revised < remainingSteps - 1)
+                    {
+                        remainingSteps = revised + 1; // the loop decrement accounts for the step just run
+                        frameTime = timeLeft / revised;
+                        adaptive = revised > Math.Max(1, _substeps);
+                    }
+                }
             }
 
             EffectiveCurTime = null;
+        }
+
+        private void BeforePhysicsStep(bool prediction, float frameTime)
+        {
+            using var group = _prof.Group("PreSolve", Color.Green);
+            var update = new PhysicsUpdateBeforeSolveEvent(prediction, frameTime);
+            RaiseLocalEvent(ref update);
+        }
+
+        private void AfterPhysicsStep(bool prediction, float frameTime)
+        {
+            using var group = _prof.Group("PostSolve", Color.Yellow);
+            var update = new PhysicsUpdateAfterSolveEvent(prediction, frameTime);
+            RaiseLocalEvent(ref update);
+        }
+
+        private void FindPhysicsContacts()
+        {
+            using var group = _prof.Group("Broadphase", Color.Cyan);
+            _broadphase.FindNewContacts();
+        }
+
+        private bool UpdatePhysicsContacts(SubstepScope scope)
+        {
+            using var group = _prof.Group("Collide", Color.Orange);
+            return CollideContacts(scope);
+        }
+
+        private void SolvePhysicsStep(bool prediction, float frameTime, SubstepScope scope = default, bool clearForces = true)
+        {
+            UpdatePhysicsContacts(scope);
+            SolvePhysicsIslands(prediction, frameTime, scope, clearForces);
+        }
+
+        private void SolvePhysicsIslands(bool prediction, float frameTime, SubstepScope scope, bool clearForces)
+        {
+            using var group = _prof.Group("Solve", Color.Red);
+            Step(frameTime, prediction, scope, clearForces);
         }
 
         protected virtual void FinalStep()
