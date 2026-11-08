@@ -1,8 +1,10 @@
-﻿using System;
+using System;
 using System.Collections.Concurrent;
 using System.Collections.Frozen;
 using System.Linq.Expressions;
+using System.Reflection;
 using System.Runtime.CompilerServices;
+using Robust.Shared.GameObjects;
 using Robust.Shared.Serialization.Manager.Definition;
 using Robust.Shared.Serialization.Manager.Exceptions;
 using Robust.Shared.Serialization.Markdown;
@@ -68,17 +70,26 @@ public sealed partial class SerializationManager
         }, this);
     }
 
+    private static readonly MethodInfo ComponentCopyFactory =
+        typeof(SerializationManager).GetMethod(nameof(CreateComponentCopy), BindingFlags.Instance | BindingFlags.NonPublic)!;
+
+    private CopyToGenericDelegate<IComponent> CreateComponentCopy<TComponent>()
+        where TComponent : class, IComponent, ISerializationGenerated<TComponent>
+    {
+        var definition = GetDefinition<TComponent>();
+        return (IComponent source, ref IComponent target, SerializationHookContext hookCtx, ISerializationContext? context) =>
+        {
+            var component = (TComponent) target;
+            var copied = CopyToInternal((TComponent) source, ref component, definition, this, hookCtx, context);
+            target = component;
+            return copied;
+        };
+    }
+
     private CopyToGenericDelegate<T> GetOrCreateCopyToGenericDelegate<T>(T source)
     {
         static object ValueFactory(Type baseType, Type actualType, SerializationManager manager)
         {
-            var instanceParam = Expression.Constant(manager);
-            var sourceParam = Expression.Parameter(baseType, "source");
-            var targetParam = Expression.Parameter(baseType.MakeByRefType(), "target");
-            var hookCtxParam = Expression.Parameter(typeof(SerializationHookContext), "hookCtx");
-            var contextParam = Expression.Parameter(typeof(ISerializationContext), "context");
-
-            Expression call;
             var sameType = baseType == actualType;
 
             if (baseType.IsGenericType)
@@ -89,9 +100,26 @@ public sealed partial class SerializationManager
                     actualType = baseType;
             }
 
+            var hasCopier = manager._regularSerializerProvider.TryGetTypeSerializer(typeof(ITypeCopier<>), actualType, out var copier);
+            var generated = !hasCopier && actualType.IsAssignableTo(typeof(ISerializationGenerated<>).MakeGenericType(actualType));
+            if (baseType == typeof(IComponent) && actualType.IsClass && generated)
+            {
+                // Prototype spawning copies through IComponent. Use a typed method instead of compiling
+                // an expression tree when the first entity with this component is created.
+                return ComponentCopyFactory.MakeGenericMethod(actualType)
+                    .CreateDelegate<Func<CopyToGenericDelegate<IComponent>>>(manager)();
+            }
+
+            var instanceParam = Expression.Constant(manager);
+            var sourceParam = Expression.Parameter(baseType, "source");
+            var targetParam = Expression.Parameter(baseType.MakeByRefType(), "target");
+            var hookCtxParam = Expression.Parameter(typeof(SerializationHookContext), "hookCtx");
+            var contextParam = Expression.Parameter(typeof(ISerializationContext), "context");
+
+            Expression call;
             var targetVar = sameType ? targetParam : Expression.Variable(actualType);
             Expression sourceVar = sameType ? sourceParam : Expression.Convert(sourceParam, actualType);
-            if (manager._regularSerializerProvider.TryGetTypeSerializer(typeof(ITypeCopier<>), actualType, out var copier))
+            if (hasCopier)
             {
                 var copierType = typeof(ITypeCopier<>).MakeGenericType(actualType);
                 var copierConstant = Expression.Constant(copier, copierType);
@@ -109,7 +137,7 @@ public sealed partial class SerializationManager
                         Expression.Constant(false)),
                     Expression.Constant(true));
             }
-            else if (actualType.IsAssignableTo(typeof(ISerializationGenerated<>).MakeGenericType(actualType)))
+            else if (generated)
             {
                 call = Expression.Call(instanceParam, nameof(CopyToInternal), new[] { actualType }, sourceVar, targetVar,
                     Expression.Constant(manager.GetDefinition(actualType), typeof(DataDefinition<>).MakeGenericType(actualType)),
