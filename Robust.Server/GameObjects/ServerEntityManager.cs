@@ -147,7 +147,11 @@ namespace Robust.Server.GameObjects
         private readonly Dictionary<ICommonSession, uint> _lastProcessedSequencesCmd =
             new();
 
+        private static readonly TimeSpan LateMessageLogInterval = TimeSpan.FromSeconds(1);
         private bool _logLateMsgs;
+        private TimeSpan _nextLateMessageLog;
+        private int _lateMessageCount;
+        private uint _maxLateMessageTicks;
 
         /// <inheritdoc />
         public void SetupNetworking()
@@ -156,7 +160,12 @@ namespace Robust.Server.GameObjects
 
             _playerManager.PlayerStatusChanged += OnPlayerStatusChanged;
 
-            _configurationManager.OnValueChanged(CVars.NetLogLateMsg, b => _logLateMsgs = b, true);
+            _configurationManager.OnValueChanged(CVars.NetLogLateMsg, enabled =>
+            {
+                _logLateMsgs = enabled;
+                _lateMessageCount = 0;
+                _maxLateMessageTicks = 0;
+            }, true);
         }
 
         /// <inheritdoc />
@@ -170,6 +179,15 @@ namespace Robust.Server.GameObjects
                 {
                     DispatchEntityNetworkMessage(_queue.Take());
                 }
+            }
+
+            if (_lateMessageCount > 0 && _gameTiming.RealTime >= _nextLateMessageLog)
+            {
+                _netEntSawmill.Warning("Received {Count} late entity messages (maximum delay: {Ticks} ticks).",
+                    _lateMessageCount, _maxLateMessageTicks);
+                _lateMessageCount = 0;
+                _maxLateMessageTicks = 0;
+                _nextLateMessageLog = _gameTiming.RealTime + LateMessageLogInterval;
             }
 
             base.TickUpdate(frameTime, noPredictions, histogram);
@@ -224,18 +242,11 @@ namespace Robust.Server.GameObjects
 
             if (_logLateMsgs)
             {
-                var msgT = message.SourceTick;
-                var cT = _gameTiming.CurTick;
-
-                if (msgT < cT)
+                var currentTick = _gameTiming.CurTick;
+                if (message.SourceTick < currentTick)
                 {
-                    _netEntSawmill.Warning(
-                        "Got late MsgEntity! Diff: {0}, msgT: {2}, cT: {3}, player: {1}, msg: {4}",
-                        (int)msgT.Value - (int)cT.Value,
-                        message.MsgChannel.UserName,
-                        msgT,
-                        cT,
-                        message.SystemMessage);
+                    _lateMessageCount++;
+                    _maxLateMessageTicks = Math.Max(_maxLateMessageTicks, currentTick.Value - message.SourceTick.Value);
                 }
             }
 

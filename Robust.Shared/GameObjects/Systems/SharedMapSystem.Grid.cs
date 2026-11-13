@@ -451,7 +451,8 @@ public abstract partial class SharedMapSystem
                 // Chunk may have been re-added sometime after it was deleted, but before deletion history was culled.
                 if (!component.Chunks.TryGetValue(indices, out var chunk))
                 {
-                    chunkData.Add(indices, ChunkDatum.Empty);
+                    // A chunk can be created and deleted repeatedly before a client acknowledges the delta.
+                    chunkData.TryAdd(indices, ChunkDatum.Empty);
                     continue;
                 }
 

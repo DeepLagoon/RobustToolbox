@@ -1,5 +1,6 @@
 using System.Linq;
 using System.Numerics;
+using Moq;
 using NUnit.Framework;
 using Robust.Shared;
 using Robust.Shared.Configuration;
@@ -8,6 +9,7 @@ using Robust.Shared.Map;
 using Robust.Shared.Map.Components;
 using Robust.Shared.Maths;
 using Robust.Shared.Physics.Components;
+using Robust.Shared.Timing;
 using Robust.Server.Physics;
 using Robust.Server.Physics.Components;
 using Robust.UnitTesting.Server;
@@ -26,6 +28,40 @@ internal sealed class GridSplit_Tests
         config.SetCVar(CVars.GridSplitting, true);
 
         return sim;
+    }
+
+    [Test]
+    public void GridDeltaIncludesRepeatedlyDeletedChunkOnce()
+    {
+        var sim = GetSim();
+        var entities = sim.Resolve<IEntityManager>();
+        var timing = sim.Resolve<IGameTiming>();
+        Mock.Get(timing).SetupProperty(gameTiming => gameTiming.CurTick, GameTick.First);
+        var map = entities.System<SharedMapSystem>();
+        var grid = map.CreateGridEntity(sim.CreateMap().MapId);
+        grid.Comp.CanSplit = false;
+        var chunk = new Vector2i(1, 0);
+        var tile = new Vector2i(grid.Comp.ChunkSize, 0);
+        map.SetTile(grid, Vector2i.Zero, new Tile(1));
+
+        var fromTick = timing.CurTick + 1;
+        timing.CurTick = fromTick;
+        map.SetTile(grid, tile, new Tile(1));
+        map.SetTile(grid, tile, Tile.Empty);
+        timing.CurTick = fromTick + 1;
+        map.SetTile(grid, tile, new Tile(1));
+        map.SetTile(grid, tile, Tile.Empty);
+        Assert.That(grid.Comp.ChunkDeletionHistory.Count(entry => entry.indices == chunk), Is.EqualTo(2));
+
+        var delta = (MapGridComponentDeltaState) entities.GetComponentState(entities.EventBus, grid.Comp, null, fromTick)!;
+        Assert.That(delta.ChunkData, Is.Not.Null);
+        Assert.That(delta.ChunkData!.Count, Is.EqualTo(1));
+        Assert.That(delta.ChunkData![chunk].IsDeleted(), Is.True);
+
+        timing.CurTick = fromTick + 2;
+        map.SetTile(grid, tile, new Tile(1));
+        delta = (MapGridComponentDeltaState) entities.GetComponentState(entities.EventBus, grid.Comp, null, fromTick)!;
+        Assert.That(delta.ChunkData![chunk].IsDeleted(), Is.False);
     }
 
     /// <summary>
