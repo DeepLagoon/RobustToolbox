@@ -295,6 +295,7 @@ namespace Robust.UnitTesting.Server
             container.RegisterInstance<IPlayerManager>(new Mock<IPlayerManager>().Object);
             container.RegisterInstance<ISharedPlayerManager>(new Mock<ISharedPlayerManager>().Object);
             container.RegisterInstance<IServerGameStateManager>(new Mock<IServerGameStateManager>().Object);
+            container.Register<ServerTickTiming>();
             container.RegisterInstance<IReplayRecordingManager>(new Mock<IReplayRecordingManager>().Object);
             container.RegisterInstance<IServerReplayRecordingManager>(new Mock<IServerReplayRecordingManager>().Object);
 

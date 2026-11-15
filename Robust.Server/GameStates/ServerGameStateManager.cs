@@ -23,6 +23,7 @@ namespace Robust.Server.GameStates
         [Dependency] private EntityManager _entityManager = default!;
         [Dependency] private IServerNetManager _networkManager = default!;
         [Dependency] private IPlayerManager _playerManager = default!;
+        [Dependency] private ServerTickTiming _tickTiming = default!;
 
         private ISawmill _logger = default!;
 
@@ -65,7 +66,10 @@ namespace Robust.Server.GameStates
         public void SendGameStateUpdate()
         {
             var players = _playerManager.Sessions.Where(o => o.Status == SessionStatus.InGame).ToArray();
-            _pvs.SendGameStates(players);
+            var timing = _tickTiming.Collecting ? _tickTiming : null;
+            timing?.Mark(ServerTickTiming.Phase.PvsSessions);
+            timing?.SetPvsPlayers(players.Length);
+            _pvs.SendGameStates(players, timing);
         }
 
         [EventSource(Name = "Robust.Pvs")]

@@ -33,6 +33,7 @@ internal sealed partial class PvsSystem : EntitySystem
     [Dependency] private IPlayerManager _playerManager = default!;
     [Dependency] private IParallelManager _parallelManager = default!;
     [Dependency] private IServerGameStateManager _serverGameStateManager = default!;
+    [Dependency] private ServerTickTiming _tickTiming = default!;
     [Dependency] private IServerNetConfigurationManager _netConfigManager = default!;
     [Dependency] private SharedTransformSystem _transform = default!;
     [Dependency] private InputSystem _input = default!;
@@ -187,41 +188,56 @@ internal sealed partial class PvsSystem : EntitySystem
 
     public override void Update(float frameTime)
     {
+        if (!_tickTiming.Collecting)
+        {
+            ProcessDeletions();
+            return;
+        }
+
+        var start = System.Diagnostics.Stopwatch.GetTimestamp();
         ProcessDeletions();
+        _tickTiming.RecordPvsMaintenance(System.Diagnostics.Stopwatch.GetTimestamp() - start);
     }
 
     /// <summary>
     /// Send this tick's game state data to players.
     /// </summary>
-    internal void SendGameStates(ICommonSession[] players)
+    internal void SendGameStates(ICommonSession[] players, ServerTickTiming? timing = null)
     {
         _getStateHandlers ??= EntityManager.EventBusInternal.GetNetCompEventHandlers<ComponentGetState>();
+        timing?.SetAsyncPvs(_async);
 
         // Wait for pending jobs and process disconnected players
-        ProcessDisconnections();
+        ProcessDisconnections(timing);
 
         // Ensure each session has a PvsSession entry before starting any parallel jobs.
         CacheSessionData(players);
+        timing?.Mark(ServerTickTiming.Phase.PvsPrepare);
 
         // Get visible chunks, and update any dirty chunks.
         BeforeSerializeStates();
+        timing?.Mark(ServerTickTiming.Phase.PvsVisibilityAndAcks);
 
         // Construct & serialize the game state for each player (and update the replay).
         SerializeStates();
+        timing?.Mark(ServerTickTiming.Phase.PvsSerialize);
 
         foreach (var uid in _toDelete)
         {
             QueueDel(uid);
         }
         _toDelete.Clear();
+        timing?.Mark(ServerTickTiming.Phase.PvsCleanup);
 
         // Compress & send the states.
         SendStates();
+        timing?.Mark(ServerTickTiming.Phase.PvsSend);
 
         // Cull deletion history.
         AfterSerializeStates();
 
         ProcessLeavePvs();
+        timing?.Mark(ServerTickTiming.Phase.PvsCleanup);
     }
 
     private void ResetParallelism(int _) => ResetParallelism();
@@ -453,10 +469,11 @@ internal sealed partial class PvsSystem : EntitySystem
         ackJob?.WaitOne();
     }
 
-    internal void ProcessDisconnections()
+    internal void ProcessDisconnections(ServerTickTiming? timing = null)
     {
         WaitSendTask();
         WaitLeaveTask();
+        timing?.Mark(ServerTickTiming.Phase.PvsWaitPrevious);
 
         foreach (var session in _disconnected)
         {

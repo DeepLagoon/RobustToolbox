@@ -82,6 +82,7 @@ namespace Robust.Server
         [Dependency] private IResourceManagerInternal _resources = default!;
         [Dependency] private ITimerManager _timerManager = default!;
         [Dependency] private IServerGameStateManager _stateManager = default!;
+        [Dependency] private ServerTickTiming _tickTiming = default!;
         [Dependency] private IServerNetManager _network = default!;
         [Dependency] private ISystemConsoleManager _systemConsole = default!;
         [Dependency] private ITaskManager _taskManager = default!;
@@ -553,6 +554,9 @@ namespace Robust.Server
 
             _uptimeStopwatch.Start();
 
+            _tickTiming.Initialize(_log.GetSawmill("srv.tick_timing"));
+            _config.OnValueChanged(ServerTickTiming.LogEnabled, _tickTiming.SetEnabled, true);
+
             _mainLoop.Input += (sender, args) => Input(args);
 
             _mainLoop.Tick += (sender, args) => Update(args);
@@ -728,6 +732,26 @@ namespace Robust.Server
 
         private void Update(FrameEventArgs frameEventArgs)
         {
+            if (!_tickTiming.Enabled)
+            {
+                UpdateTick(frameEventArgs, null);
+                return;
+            }
+
+            _tickTiming.BeginTick();
+            try
+            {
+                UpdateTick(frameEventArgs, _tickTiming);
+                _tickTiming.CompleteTick(_time.CurTick, _time.TickPeriod);
+            }
+            finally
+            {
+                _tickTiming.StopTick();
+            }
+        }
+
+        private void UpdateTick(FrameEventArgs frameEventArgs, ServerTickTiming? timing)
+        {
             ServerCurTick.Set(_time.CurTick.Value);
             ServerCurTime.Set(_time.CurTime.TotalSeconds);
 
@@ -755,13 +779,16 @@ namespace Robust.Server
             }
 
             // Pass Histogram into the IEntityManager.Update so it can do more granular measuring.
+            timing?.Mark(ServerTickTiming.Phase.Setup);
             _entityManager.TickUpdate(frameEventArgs.DeltaSeconds, noPredictions: false, TickUsage);
+            timing?.Mark(ServerTickTiming.Phase.Simulation);
 
             using (TickUsage.WithLabels("PostEngine").NewTimer())
             {
                 _modLoader.BroadcastUpdate(ModUpdateLevel.PostEngine, frameEventArgs);
             }
 
+            timing?.Mark(ServerTickTiming.Phase.PostSimulation);
             using (TickUsage.WithLabels("GameState").NewTimer())
             {
                 _stateManager.SendGameStateUpdate();
