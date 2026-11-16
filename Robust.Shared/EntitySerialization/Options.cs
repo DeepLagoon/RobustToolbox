@@ -1,4 +1,5 @@
 ﻿using System.Numerics;
+using System;
 using Robust.Shared.EntitySerialization.Components;
 using Robust.Shared.GameObjects;
 using Robust.Shared.Log;
@@ -87,6 +88,11 @@ public record struct DeserializationOptions()
     /// If false, maps need to be manually given ids before entities are initialized.
     /// </summary>
     public bool AssignMapIds = true;
+
+    /// <summary>
+    /// Optional timing report for successful loads through <see cref="Systems.MapLoaderSystem"/>.
+    /// </summary>
+    public Action<MapLoadTimings>? ReportMapLoadTimings;
 }
 
 /// <summary>

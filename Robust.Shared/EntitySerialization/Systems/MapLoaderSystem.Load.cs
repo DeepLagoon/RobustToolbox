@@ -11,6 +11,7 @@ using Robust.Shared.Map.Events;
 using Robust.Shared.Maths;
 using Robust.Shared.Serialization.Markdown.Mapping;
 using Robust.Shared.Utility;
+using Stopwatch = System.Diagnostics.Stopwatch;
 
 namespace Robust.Shared.EntitySerialization.Systems;
 
@@ -70,11 +71,13 @@ public sealed partial class MapLoaderSystem
     public bool TryLoadGeneric(ResPath file, [NotNullWhen(true)] out LoadResult? result, MapLoadOptions? options = null)
     {
         result = null;
+        var measure = options?.DeserializationOptions.ReportMapLoadTimings != null;
+        var start = measure ? Stopwatch.GetTimestamp() : 0;
 
         if (!TryReadFile(file.ToRootedPath(), out var data))
             return false;
 
-        return TryLoadGeneric(data, file.ToString(), out result, options);
+        return TryLoadGeneric(data, file.ToString(), out result, options, start);
     }
 
     /// <summary>
@@ -88,11 +91,13 @@ public sealed partial class MapLoaderSystem
     public bool TryLoadGeneric(TextReader reader, string source, [NotNullWhen(true)] out LoadResult? result, MapLoadOptions? options = null)
     {
         result = null;
+        var measure = options?.DeserializationOptions.ReportMapLoadTimings != null;
+        var start = measure ? Stopwatch.GetTimestamp() : 0;
 
         if (!TryReadFile(reader, out var data))
             return false;
 
-        return TryLoadGeneric(data, source, out result, options);
+        return TryLoadGeneric(data, source, out result, options, start);
     }
 
     /// <summary>
@@ -104,28 +109,31 @@ public sealed partial class MapLoaderSystem
     /// <param name="result">Data class containing information about the loaded entities</param>
     /// <param name="options">Optional Options for configuring loading behaviour.</param>
     public bool TryLoadGeneric(Stream stream, string source, [NotNullWhen(true)] out LoadResult? result, MapLoadOptions? options = null)
-    {
-        result = null;
-
-        if (!TryReadFile(new StreamReader(stream, leaveOpen: true), out var data))
-            return false;
-
-        return TryLoadGeneric(data, source, out result, options);
-    }
+        => TryLoadGeneric(new StreamReader(stream, leaveOpen: true), source, out result, options);
 
     public bool TryLoadGeneric(
         MappingDataNode data,
         string source,
         [NotNullWhen(true)] out LoadResult? result,
         MapLoadOptions? options = null)
+        => TryLoadGeneric(data, source, out result, options, 0);
+
+    private bool TryLoadGeneric(
+        MappingDataNode data,
+        string source,
+        [NotNullWhen(true)] out LoadResult? result,
+        MapLoadOptions? options,
+        long readStart)
     {
         result = null;
+
+        var opts = options ?? MapLoadOptions.Default;
+        var report = opts.DeserializationOptions.ReportMapLoadTimings;
+        var prepareStart = report != null ? Stopwatch.GetTimestamp() : 0;
 
         _stopwatch.Restart();
         var ev = new BeforeEntityReadEvent();
         RaiseLocalEvent(ev);
-
-        var opts = options ?? MapLoadOptions.Default;
 
         // If we are forcing a map id, we cannot auto-assign ids.
         opts.DeserializationOptions.AssignMapIds = opts.ForceMapId == null;
@@ -166,9 +174,12 @@ public sealed partial class MapLoaderSystem
             return false;
         }
 
+        var createStart = report != null ? Stopwatch.GetTimestamp() : 0;
+        long createEnd;
         try
         {
             deserializer.CreateEntities();
+            createEnd = report != null ? Stopwatch.GetTimestamp() : 0;
         }
         catch (Exception e)
         {
@@ -197,6 +208,7 @@ public sealed partial class MapLoaderSystem
         // Apply any offsets & rotations specified by the load options
         ApplyTransform(deserializer, opts);
 
+        var initializeStart = report != null ? Stopwatch.GetTimestamp() : 0;
         try
         {
             deserializer.StartEntities();
@@ -212,6 +224,18 @@ public sealed partial class MapLoaderSystem
             MapInitalizeMerged(merged, map);
 
         result = deserializer.Result;
+        if (report != null)
+        {
+            var end = Stopwatch.GetTimestamp();
+            report(new MapLoadTimings(
+                Stopwatch.GetElapsedTime(readStart != 0 ? readStart : prepareStart, end),
+                readStart != 0 ? Stopwatch.GetElapsedTime(readStart, prepareStart) : TimeSpan.Zero,
+                Stopwatch.GetElapsedTime(prepareStart, createStart) + Stopwatch.GetElapsedTime(createEnd, initializeStart),
+                Stopwatch.GetElapsedTime(createStart, createEnd),
+                Stopwatch.GetElapsedTime(initializeStart, end),
+                result.Entities.Count));
+        }
+
         Log.Debug($"Loaded map in {_stopwatch.Elapsed}");
         return true;
     }
