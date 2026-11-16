@@ -7,6 +7,7 @@ using Robust.Shared.GameStates;
 using Robust.Shared.Map;
 using Robust.Shared.Map.Components;
 using Robust.Shared.Maths;
+using Robust.Shared.Network;
 using Robust.Shared.Physics.Collision;
 using Robust.Shared.Physics.Components;
 using Robust.Shared.Physics.Events;
@@ -42,6 +43,7 @@ namespace Robust.Shared.Physics.Systems
             });
 
         [Dependency] private IConfigurationManager _cfg = default!;
+        [Dependency] private INetManager _netMan = default!;
         [Dependency] private IManifoldManager _manifoldManager = default!;
         [Dependency] private IParallelManager _parallel = default!;
         [Dependency] private EntityLookupSystem _lookup = default!;

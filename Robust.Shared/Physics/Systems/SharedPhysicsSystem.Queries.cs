@@ -7,7 +7,6 @@ using Robust.Shared.GameObjects;
 using Robust.Shared.IoC;
 using Robust.Shared.Map;
 using Robust.Shared.Maths;
-using Robust.Shared.Network;
 using Robust.Shared.Physics.Collision;
 using Robust.Shared.Physics.Collision.Shapes;
 using Robust.Shared.Physics.Components;
@@ -23,7 +22,6 @@ namespace Robust.Shared.Physics.Systems
     {
 #if DEBUG
         [Dependency] private SharedDebugRayDrawingSystem _sharedDebugRaySystem = default!;
-        [Dependency] private INetManager _netMan = default!;
 #endif
 
         /// <summary>
