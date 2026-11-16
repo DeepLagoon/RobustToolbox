@@ -44,6 +44,11 @@ public partial interface IEntityManager
     EntityUid SpawnAttachedTo(string? protoName, EntityCoordinates coordinates, ComponentRegistry? overrides = null, Angle rotation = default);
 
     /// <summary>
+    /// Spawns an entity using the normal lifecycle and records the creation and initialization times.
+    /// </summary>
+    EntityUid SpawnAttachedToTimed(string? protoName, EntityCoordinates coordinates, EntitySpawnTimings timings);
+
+    /// <summary>
     /// Resolves the given entity coordinates into world coordinates and spawns an entity at that location. The
     /// entity will either be parented to the map or a grid.
     /// </summary>

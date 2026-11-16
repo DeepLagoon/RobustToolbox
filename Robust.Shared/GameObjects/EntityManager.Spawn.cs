@@ -8,6 +8,7 @@ using Robust.Shared.Collections;
 using Robust.Shared.Containers;
 using Robust.Shared.Maths;
 using Robust.Shared.Serialization;
+using Stopwatch = System.Diagnostics.Stopwatch;
 
 namespace Robust.Shared.GameObjects;
 
@@ -100,12 +101,30 @@ public partial class EntityManager
 
     public virtual EntityUid SpawnAttachedTo(string? protoName, EntityCoordinates coordinates, ComponentRegistry? overrides = null, Angle rotation = default)
     {
-        if (!coordinates.IsValid(this))
-            throw new InvalidOperationException($"Tried to spawn entity {protoName} on invalid coordinates {coordinates}.");
+        ValidateSpawnCoordinates(protoName, coordinates);
 
         var entity = CreateEntityUninitialized(protoName, coordinates, overrides, rotation);
         InitializeAndStartEntity(entity, _xforms.GetMapId(coordinates));
         return entity;
+    }
+
+    public EntityUid SpawnAttachedToTimed(string? protoName, EntityCoordinates coordinates, EntitySpawnTimings timings)
+    {
+        ValidateSpawnCoordinates(protoName, coordinates);
+
+        var start = Stopwatch.GetTimestamp();
+        var entity = CreateEntityUninitialized(protoName, coordinates);
+        var created = Stopwatch.GetTimestamp();
+        InitializeAndStartEntity(entity, _xforms.GetMapId(coordinates));
+        timings.Add(start, created, Stopwatch.GetTimestamp());
+        return entity;
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private void ValidateSpawnCoordinates(string? protoName, EntityCoordinates coordinates)
+    {
+        if (!coordinates.IsValid(this))
+            throw new InvalidOperationException($"Tried to spawn entity {protoName} on invalid coordinates {coordinates}.");
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
