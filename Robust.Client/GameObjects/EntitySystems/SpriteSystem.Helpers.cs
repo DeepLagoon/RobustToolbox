@@ -15,7 +15,12 @@ namespace Robust.Client.GameObjects;
 // sprite specifiers and entity prototypes.
 public sealed partial class SpriteSystem
 {
+    private const int MaxRsiErrorsPerWindow = 128;
+    private static readonly TimeSpan RsiErrorWindow = TimeSpan.FromMinutes(1);
+
     private readonly Dictionary<string, IRsiStateLike> _cachedPrototypeIcons = new();
+    private readonly HashSet<(ResPath Path, string State)> _loggedRsiErrors = new();
+    private TimeSpan _rsiErrorWindowEnds;
 
     public Texture Frame0(EntityPrototype prototype)
     {
@@ -179,8 +184,25 @@ public sealed partial class SpriteSystem
             return state;
         }
 
-        Log.Error("Failed to load RSI {0}", rsiSpecifier.RsiPath);
+        LogRsiError(rsiSpecifier);
         return GetFallbackState();
+    }
+
+    private void LogRsiError(SpriteSpecifier.Rsi specifier)
+    {
+        var now = _timing.RealTime;
+        if (now >= _rsiErrorWindowEnds)
+        {
+            _loggedRsiErrors.Clear();
+            _rsiErrorWindowEnds = now + RsiErrorWindow;
+        }
+
+        // UI code can request a missing icon every frame. Bound the number of distinct failures too.
+        if (_loggedRsiErrors.Count < MaxRsiErrorsPerWindow &&
+            _loggedRsiErrors.Add((specifier.RsiPath, specifier.RsiState)))
+        {
+            Log.Error("Failed to load RSI {RsiPath} state {RsiState}", specifier.RsiPath, specifier.RsiState);
+        }
     }
 
     public Texture GetTexture(SpriteSpecifier.Texture texSpecifier)

@@ -1,5 +1,5 @@
 using System;
-using System.Collections.Concurrent;
+using System.Collections.Generic;
 using System.IO;
 using System.Text.Json;
 using System.Threading.Tasks;
@@ -33,12 +33,8 @@ namespace Robust.Client.UserInterface.CustomControls
         void Clear();
     }
 
-    // Quick note on how thread safety works in here:
-    // Messages from other threads are not actually immediately drawn. They're stored in a queue.
-    // Every frame OR the next time a message on the main thread comes in, this queue is drained.
-    // This keeps thread safety while still making it so messages are ordered how they come in.
-    // And also if Update() stops firing due to an exception loop the console will still work.
-    // (At least from the main thread, which is what's throwing the exceptions..)
+    // Logs can arrive from any thread, including when a hidden console receives no FrameUpdate.
+    // Keep the newest pending messages within the console's history limit.
     [GenerateTypedNameReferences]
     public sealed partial class DebugConsole : Control, IDebugConsoleView
     {
@@ -49,10 +45,20 @@ namespace Robust.Client.UserInterface.CustomControls
 
         private static readonly ResPath HistoryPath = new("/debug_console_history.json");
 
-        private readonly ConcurrentQueue<FormattedMessage> _messageQueue = new();
+        private readonly Queue<FormattedMessage> _messageQueue = new();
+        private readonly object _messageQueueLock = new();
         private readonly ISawmill _logger;
 
-        private int _maxEntries;
+        private int _maxEntries = CVars.ConMaxEntries.DefaultValue;
+
+        internal int PendingMessageCount
+        {
+            get
+            {
+                lock (_messageQueueLock)
+                    return _messageQueue.Count;
+            }
+        }
 
         public DebugConsole()
         {
@@ -99,7 +105,13 @@ namespace Robust.Client.UserInterface.CustomControls
 
         private void MaxEntriesChanged(int value)
         {
-            _maxEntries = value;
+            lock (_messageQueueLock)
+            {
+                _maxEntries = Math.Max(0, value);
+                while (_messageQueue.Count > _maxEntries)
+                    _messageQueue.Dequeue();
+            }
+
             TrimExtraOutputEntries();
         }
 
@@ -162,11 +174,23 @@ namespace Robust.Client.UserInterface.CustomControls
 
         public void AddFormattedLine(FormattedMessage message)
         {
-            _messageQueue.Enqueue(message);
+            lock (_messageQueueLock)
+            {
+                if (_maxEntries == 0)
+                    return;
+
+                if (_messageQueue.Count == _maxEntries)
+                    _messageQueue.Dequeue();
+
+                _messageQueue.Enqueue(message);
+            }
         }
 
         public void Clear()
         {
+            lock (_messageQueueLock)
+                _messageQueue.Clear();
+
             Output.Clear();
         }
 
@@ -186,8 +210,17 @@ namespace Robust.Client.UserInterface.CustomControls
 
         private void _flushQueue()
         {
-            while (_messageQueue.TryDequeue(out var message))
+            // Bound the work even when other threads keep logging while we render the messages.
+            var pending = PendingMessageCount;
+            for (var i = 0; i < pending; i++)
             {
+                FormattedMessage? message;
+                lock (_messageQueueLock)
+                {
+                    if (!_messageQueue.TryDequeue(out message))
+                        break;
+                }
+
                 _addFormattedLineInternal(message);
             }
         }
