@@ -1,6 +1,7 @@
 using System.Collections.Generic;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
+using System.Threading;
 using Robust.Shared.GameObjects;
 using Robust.Shared.Timing;
 using Robust.Shared.Utility;
@@ -16,6 +17,16 @@ internal sealed partial class PvsSystem
 
     private readonly HashSet<EntityUid> _forceOverrideSet = new();
     private readonly HashSet<EntityUid> _globalOverrideSet = new();
+    private int _reportedInvalidOverrideSources;
+
+    private enum OverrideSource
+    {
+        SessionOverrides,
+        Viewers,
+        SessionForceSend,
+        ExpandEventEntities,
+        ExpandEventRecursiveEntities,
+    }
 
     private void AddAllOverrides(PvsSession session)
     {
@@ -37,7 +48,7 @@ internal sealed partial class PvsSystem
 
         foreach (var uid in sessionOverrides)
         {
-            RecursivelyAddOverride(session, uid, fromTick, addChildren: true, mask);
+            AddOverride(session, uid, fromTick, addChildren: true, mask, OverrideSource.SessionOverrides);
         }
     }
 
@@ -62,7 +73,7 @@ internal sealed partial class PvsSystem
 
         foreach (var uid in session.Viewers)
         {
-            RecursivelyAddOverride(session, uid, fromTick, addChildren: false, mask);
+            AddOverride(session, uid, fromTick, addChildren: false, mask, OverrideSource.Viewers);
         }
 
         if (!_pvsOverride.SessionForceSend.TryGetValue(session.Session, out var sessionForce))
@@ -70,7 +81,7 @@ internal sealed partial class PvsSystem
 
         foreach (var uid in sessionForce)
         {
-            RecursivelyAddOverride(session, uid, fromTick, addChildren: false, mask);
+            AddOverride(session, uid, fromTick, addChildren: false, mask, OverrideSource.SessionForceSend);
         }
     }
 
@@ -87,7 +98,7 @@ internal sealed partial class PvsSystem
         {
             foreach (var uid in expandEvent.Entities)
             {
-                RecursivelyAddOverride(session, uid, fromTick, addChildren: false, expandEvent.VisMask);
+                AddOverride(session, uid, fromTick, addChildren: false, expandEvent.VisMask, OverrideSource.ExpandEventEntities);
             }
         }
 
@@ -96,10 +107,23 @@ internal sealed partial class PvsSystem
 
         foreach (var uid in expandEvent.RecursiveEntities)
         {
-            RecursivelyAddOverride(session, uid, fromTick, addChildren: true, expandEvent.VisMask);
+            AddOverride(session, uid, fromTick, addChildren: true, expandEvent.VisMask, OverrideSource.ExpandEventRecursiveEntities);
         }
 
         return expandEvent.VisMask;
+    }
+
+    private void AddOverride(PvsSession session, EntityUid uid, GameTick fromTick, bool addChildren, int mask, OverrideSource source)
+    {
+        if (uid.IsValid())
+        {
+            RecursivelyAddOverride(session, uid, fromTick, addChildren, mask);
+            return;
+        }
+
+        var flag = 1 << (int) source;
+        if ((Interlocked.Or(ref _reportedInvalidOverrideSources, flag) & flag) == 0)
+            Log.Warning($"Ignored invalid entity {uid} received from {source}.");
     }
 
     /// <summary>

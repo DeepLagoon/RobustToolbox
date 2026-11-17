@@ -18,6 +18,7 @@ public sealed partial class PvsOverrideSystem : SharedPvsOverrideSystem
     [Dependency] private IConsoleHost _console = default!;
 
     private readonly HashSet<EntityUid> _hasOverride = new();
+    private readonly HashSet<string> _reportedInvalidOverrides = new();
 
     internal HashSet<EntityUid> GlobalOverride = new();
     internal HashSet<EntityUid> ForceSend = new();
@@ -187,6 +188,12 @@ public sealed partial class PvsOverrideSystem : SharedPvsOverrideSystem
     /// </remarks>
     public void AddForceSend(EntityUid uid, ICommonSession session)
     {
+        if (!uid.IsValid())
+        {
+            ReportInvalidOverride(uid, nameof(AddForceSend));
+            return;
+        }
+
         if (SessionForceSend.GetOrNew(session).Add(uid))
             _hasOverride.Add(uid);
     }
@@ -213,6 +220,12 @@ public sealed partial class PvsOverrideSystem : SharedPvsOverrideSystem
     /// </summary>
     public override void AddSessionOverride(EntityUid uid, ICommonSession session)
     {
+        if (!uid.IsValid())
+        {
+            ReportInvalidOverride(uid, nameof(AddSessionOverride));
+            return;
+        }
+
         base.AddSessionOverride(uid, session);
 
         if (SessionOverrides.GetOrNew(session).Add(uid))
@@ -243,6 +256,12 @@ public sealed partial class PvsOverrideSystem : SharedPvsOverrideSystem
     /// </summary>
     public override void AddSessionOverrides(EntityUid uid, Filter filter)
     {
+        if (!uid.IsValid())
+        {
+            ReportInvalidOverride(uid, nameof(AddSessionOverrides));
+            return;
+        }
+
         _hasOverride.Add(uid);
         base.AddSessionOverrides(uid, filter);
 
@@ -250,6 +269,12 @@ public sealed partial class PvsOverrideSystem : SharedPvsOverrideSystem
         {
             SessionOverrides.GetOrNew(session).Add(uid);
         }
+    }
+
+    private void ReportInvalidOverride(EntityUid uid, string operation)
+    {
+        if (_reportedInvalidOverrides.Add(operation))
+            Log.Warning($"Ignored invalid entity {uid} in {operation}. First caller:{Environment.NewLine}{new System.Diagnostics.StackTrace(1, false)}");
     }
 
     #region Map/Grid Events

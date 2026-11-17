@@ -119,7 +119,7 @@ namespace Robust.Shared.GameObjects
             SetLifeStage(metadata, EntityLifeStage.Initializing);
 
             // Initialize() can modify the collection of components. Copy them.
-            FixedArray32<IComponent?> compsFixed = default;
+            FixedArray32<IComponent> compsFixed = default;
 
             var comps = compsFixed.AsSpan;
             CopyComponentsInto(ref comps, uid);
@@ -151,7 +151,7 @@ namespace Robust.Shared.GameObjects
         {
             // Startup() can modify _components
             // This code can only handle additions to the list. Is there a better way? Probably not.
-            FixedArray32<IComponent?> compsFixed = default;
+            FixedArray32<IComponent> compsFixed = default;
 
             var comps = compsFixed.AsSpan;
             CopyComponentsInto(ref comps, uid);
@@ -551,7 +551,10 @@ namespace Robust.Shared.GameObjects
             if (!MetaQuery.Resolve(uid, ref meta))
                 return;
 
-            foreach (var comp in InSafeOrder(_entCompIndex[uid]))
+            FixedArray32<IComponent> buffer = default;
+            var components = buffer.AsSpan;
+            CopyComponentsInto(ref components, uid, removalOrder: true);
+            foreach (var comp in components)
             {
                 var idx = _componentFactory.GetIndex(comp.GetType());
                 RemoveComponentImmediate(uid, comp, idx, false, meta);
@@ -564,7 +567,10 @@ namespace Robust.Shared.GameObjects
             if (!MetaQuery.Resolve(uid, ref meta))
                 return;
 
-            foreach (var comp in InSafeOrder(_entCompIndex[uid]))
+            FixedArray32<IComponent> buffer = default;
+            var components = buffer.AsSpan;
+            CopyComponentsInto(ref components, uid, removalOrder: true);
+            foreach (var comp in components)
             {
                 try
                 {
@@ -1253,19 +1259,53 @@ namespace Robust.Shared.GameObjects
         /// Copy the components for an entity into the given span,
         /// or re-allocate the span as an array if there's not enough space.º
         /// </summary>
-        private void CopyComponentsInto(ref Span<IComponent?> comps, EntityUid uid)
+        private void CopyComponentsInto(ref Span<IComponent> comps, EntityUid uid, bool removalOrder = false)
         {
             var set = _entCompIndex[uid];
             if (set.Count > comps.Length)
+                comps = new IComponent[set.Count];
+
+            // Startup, shutdown and removal events may modify the component set.
+            // Snapshot the components and keep the original stable removal order of InSafeOrder.
+            var count = 0;
+            if (removalOrder)
             {
-                comps = new IComponent?[set.Count];
+                PhysicsComponent? physics = null;
+                TransformComponent? transform = null;
+                MetaDataComponent? metadata = null;
+                foreach (var component in set)
+                {
+                    switch (component)
+                    {
+                        case PhysicsComponent body:
+                            physics = body;
+                            break;
+                        case TransformComponent xform:
+                            transform = xform;
+                            break;
+                        case MetaDataComponent meta:
+                            metadata = meta;
+                            break;
+                        default:
+                            comps[count++] = component;
+                            break;
+                    }
+                }
+
+                if (physics != null)
+                    comps[count++] = physics;
+                if (transform != null)
+                    comps[count++] = transform;
+                if (metadata != null)
+                    comps[count++] = metadata;
+            }
+            else
+            {
+                foreach (var component in set)
+                    comps[count++] = component;
             }
 
-            var i = 0;
-            foreach (var c in set)
-            {
-                comps[i++] = c;
-            }
+            comps = comps[..count];
         }
 
         /// <inheritdoc />

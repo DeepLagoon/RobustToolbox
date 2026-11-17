@@ -2,6 +2,7 @@ using System.Linq;
 using System.Numerics;
 using System.Threading.Tasks;
 using NUnit.Framework;
+using Robust.Server.GameStates;
 using Robust.Shared;
 using Robust.Shared.Configuration;
 using Robust.Shared.GameObjects;
@@ -13,6 +14,38 @@ namespace Robust.UnitTesting.Server.GameStates;
 
 public sealed class PvsSystemTests : RobustIntegrationTest
 {
+    [Test]
+    public async Task InvalidEntityIsNotStoredInSessionOverrides()
+    {
+        await using var pair = await StartConnectedPair();
+        var (client, server) = pair;
+        await RunTicksSync(server, client, 10);
+
+        await server.WaitPost(() =>
+        {
+            var entities = server.ResolveDependency<IEntityManager>();
+            var session = server.ResolveDependency<ISharedPlayerManager>().Sessions.Single();
+            var pvs = entities.System<PvsOverrideSystem>();
+            var map = entities.System<SharedMapSystem>().CreateMap(out _);
+            var entity = entities.SpawnEntity(null, new EntityCoordinates(map, Vector2.Zero));
+
+            var missingPreview = entities.GetEntity(NetEntity.Invalid);
+            pvs.AddSessionOverride(missingPreview, session);
+            pvs.AddSessionOverrides(missingPreview, Filter.Empty().AddPlayer(session));
+            pvs.AddForceSend(missingPreview, session);
+            Assert.That(pvs.SessionOverrides.ContainsKey(session), Is.False);
+            Assert.That(pvs.SessionForceSend.ContainsKey(session), Is.False);
+
+            pvs.AddSessionOverride(entity, session);
+            pvs.AddForceSend(entity, session);
+            Assert.That(pvs.SessionOverrides[session], Is.EquivalentTo(new[] { entity }));
+            Assert.That(pvs.SessionForceSend[session], Is.EquivalentTo(new[] { entity }));
+            entities.DeleteEntity(entity);
+            Assert.That(pvs.SessionOverrides.ContainsKey(session), Is.False);
+            Assert.That(pvs.SessionForceSend.ContainsKey(session), Is.False);
+        });
+    }
+
     /// <summary>
     /// Checks that there are no issues when an entity changes PVS chunk location multiple times in a single tick.
     /// </summary>

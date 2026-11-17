@@ -702,7 +702,10 @@ namespace Robust.Shared.GameObjects
                 _sawmill.Error($"Failed to delete all children of entity: {ToPrettyString(uid)}");
 
             // Shut down all components.
-            foreach (var component in InSafeOrder(_entCompIndex[uid]))
+            FixedArray32<IComponent> buffer = default;
+            var components = buffer.AsSpan;
+            CopyComponentsInto(ref components, uid, removalOrder: true);
+            foreach (var component in components)
             {
                 if (component.Running)
                 {
