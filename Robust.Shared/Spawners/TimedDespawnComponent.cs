@@ -17,4 +17,7 @@ public sealed partial class TimedDespawnComponent : Component
     /// </summary>
     [DataField("lifetime")]
     public float Lifetime = 5f;
+
+    // Local bookkeeping only; not serialized or networked. Lifetime remains directly writable.
+    internal int ActiveIndex = -1;
 }

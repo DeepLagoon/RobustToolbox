@@ -1625,12 +1625,14 @@ public abstract partial class SharedTransformSystem
             return;
         }
 
-        if (xform._localPosition.EqualsApprox(pos) && xform.LocalRotation.EqualsApprox(rot))
-            return;
-
         var oldParent = xform._parent;
         var oldPosition = xform._localPosition;
         var oldRotation = xform.LocalRotation;
+
+        // Exact stationary poses avoid the angle reductions in EqualsApprox.
+        if ((oldPosition.Equals(pos) && oldRotation.Equals(rot)) ||
+            (oldPosition.EqualsApprox(pos) && oldRotation.EqualsApprox(rot)))
+            return;
 
         if (!xform.Anchored)
             xform._localPosition = pos;
@@ -1640,8 +1642,19 @@ public abstract partial class SharedTransformSystem
 
         DebugTools.Assert(!xform.NoLocalRotation || xform.LocalRotation == 0);
 
+        var positionChanged = !oldPosition.Equals(xform._localPosition);
+        var rotationChanged = !oldRotation.Equals(xform.LocalRotation);
+        // Anchoring/NoLocalRotation may have rejected all requested changes.
+        if (!positionChanged && !rotationChanged)
+            return;
+
         var meta = MetaData(uid);
-        DirtyFields(uid, xform, meta, LocalPositionRotationFields);
+        if (positionChanged && rotationChanged)
+            DirtyFields(uid, xform, meta, LocalPositionRotationFields);
+        else if (positionChanged)
+            DirtyField(uid, xform, nameof(TransformComponent.LocalPosition), meta);
+        else
+            DirtyField(uid, xform, nameof(TransformComponent.LocalRotation), meta);
         xform.MatricesDirty = true;
 
         if (!xform.Initialized)
@@ -1653,7 +1666,7 @@ public abstract partial class SharedTransformSystem
             oldPosition,
             oldRotation,
             xform.MapUid,
-            checkTraversal: !oldPosition.Equals(pos));
+            checkTraversal: positionChanged);
     }
 
     #endregion

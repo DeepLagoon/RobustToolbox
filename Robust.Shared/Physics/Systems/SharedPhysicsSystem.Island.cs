@@ -899,6 +899,11 @@ public abstract partial class SharedPhysicsSystem
                 ? GetStaticSolverPose(bodyEnt, staticPoses)
                 : GetSolverPose(bodyEnt);
 
+            // Reuse the output buffers for the initial solver pose until FinalisePositions.
+            // Comparing in solver space avoids world/local round-trip drift at rest.
+            solvedPositions[offset + i] = position;
+            solvedAngles[offset + i] = angle;
+
             var linearVelocity = body.LinearVelocity;
             var angularVelocity = body.AngularVelocity;
 
@@ -1146,6 +1151,12 @@ public abstract partial class SharedPhysicsSystem
             if (body.BodyType == BodyType.Static)
                 continue;
 
+            var index = offset + i;
+            var initialPosition = solvedPositions[index];
+            var initialAngle = solvedAngles[index];
+            solvedPositions[index] = Vector2.Zero;
+            solvedAngles[index] = 0f;
+
             var xform = ent.Comp2;
             var parent = xform.ParentUid;
             if (parentPose.Entity != parent || parent == EntityUid.Invalid)
@@ -1157,21 +1168,26 @@ public abstract partial class SharedPhysicsSystem
                 parentPose = new(parent, (rotation, inverse));
             }
 
-            var (parentRot, parentInvMatrix) = parentPose.Value;
-            var worldRot = (float) (parentRot + xform._localRotation);
-
+            var (_, parentInvMatrix) = parentPose.Value;
             var angle = angles[i];
+            var displacement = positions[i] - initialPosition;
+            if (angle != initialAngle && body.LocalCenter != Vector2.Zero)
+            {
+                displacement -= Physics.Transform.Mul(new Quaternion2D(angle), body.LocalCenter)
+                    - Physics.Transform.Mul(new Quaternion2D(initialAngle), body.LocalCenter);
+            }
 
-            var q = new Quaternion2D(angle);
-            var adjustedPosition = positions[i] - Physics.Transform.Mul(q, body.LocalCenter);
-
-            var solvedPosition = Vector2.Transform(adjustedPosition, parentInvMatrix);
-            solvedPositions[offset + i] = solvedPosition - xform.LocalPosition;
-            solvedAngles[offset + i] = angle - worldRot;
+            // Translation cancels when converting a displacement. An unchanged solver
+            // pose now produces exact zero, including on distant or rotated grids.
+            solvedPositions[index] = Vector2.TransformNormal(displacement, parentInvMatrix);
+            solvedAngles[index] = angle - initialAngle;
             if (preparedMoves != null)
-                preparedMoves[offset + i] = _lookup.PrepareFixtureMove(ent, solvedPositions[offset + i], solvedAngles[offset + i]);
+                preparedMoves[index] = _lookup.PrepareFixtureMove(ent, solvedPositions[index], solvedAngles[index]);
         }
     }
+
+    private static readonly string[] SolverVelocityFields =
+        [nameof(PhysicsComponent.LinearVelocity), nameof(PhysicsComponent.AngularVelocity)];
 
     /// <summary>
     /// Updates the positions, rotations, and velocities of all of the solved bodies.
@@ -1219,20 +1235,21 @@ public abstract partial class SharedPhysicsSystem
             var angVelocity = angularVelocities[offset + i];
             var validLinear = !float.IsNaN(linVelocity.X) && !float.IsNaN(linVelocity.Y);
             var validAngular = !float.IsNaN(angVelocity);
-            var physicsDirtied = false;
+            bool linearChanged;
+            bool angularChanged;
 
             if (body.Awake && body.CanCollide)
             {
                 // BuildIslands already wakes these bodies. Apply both solver outputs before
                 // raising move events, without resolving the same component twice.
-                physicsDirtied = validLinear && ApplyLinearVelocity(body, linVelocity);
-                physicsDirtied |= validAngular && ApplyAngularVelocity(body, angVelocity);
+                linearChanged = validLinear && ApplyLinearVelocity(body, linVelocity);
+                angularChanged = validAngular && ApplyAngularVelocity(body, angVelocity);
             }
             else
             {
                 // An earlier body's move event may have changed this body's state.
-                physicsDirtied = validLinear && SetLinearVelocity(uid, linVelocity, false, body: body);
-                physicsDirtied |= validAngular && SetAngularVelocity(uid, angVelocity, false, body: body);
+                linearChanged = validLinear && SetLinearVelocity(uid, linVelocity, false, body: body);
+                angularChanged = validAngular && SetAngularVelocity(uid, angVelocity, false, body: body);
             }
 
             // Temporary NaN guards until PVS is fixed.
@@ -1248,10 +1265,14 @@ public abstract partial class SharedPhysicsSystem
                     _transform.SetLocalPositionRotation(uid, newPosition, newRotation, xform);
             }
 
-            if (physicsDirtied)
-            {
-                Dirty(uid, body);
-            }
+            // A full Dirty defeats Physics delta states for every observer. Move-event
+            // handlers dirty their own fields; these are only the solver's changes.
+            if (linearChanged && angularChanged)
+                DirtyFields(uid, body, null, SolverVelocityFields);
+            else if (linearChanged)
+                DirtyField(uid, body, nameof(PhysicsComponent.LinearVelocity));
+            else if (angularChanged)
+                DirtyField(uid, body, nameof(PhysicsComponent.AngularVelocity));
         }
     }
 
