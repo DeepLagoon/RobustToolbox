@@ -10,12 +10,15 @@ using Robust.Shared.Player;
 using Robust.Shared.Serialization;
 using Robust.Shared.Timing;
 using Robust.Shared.Utility;
+using Stopwatch = System.Diagnostics.Stopwatch;
 
 namespace Robust.Server.GameStates;
 
 internal sealed partial class PvsSystem
 {
     [Dependency] private IRobustSerializer _serializer = default!;
+    private bool _measurePvs;
+    private long _replayTiming;
 
     /// <summary>
     /// Get and serialize <see cref="GameState"/> objects for each player. Compressing & sending the states is done later.
@@ -41,7 +44,12 @@ internal sealed partial class PvsSystem
             if (i >= 0)
                 SerializeSessionState(_sessions[i]);
             else
+            {
+                var start = _measurePvs ? Stopwatch.GetTimestamp() : 0;
                 _replay.Update();
+                if (_measurePvs)
+                    _replayTiming = Stopwatch.GetTimestamp() - start;
+            }
 
             ServerGameStateManager.PvsEventSource.Log.WorkStop(_gameTiming.CurTick.Value, i, guid);
         }
@@ -60,6 +68,10 @@ internal sealed partial class PvsSystem
     /// </summary>
     private void SerializeSessionState(PvsSession data)
     {
+        data.Timing = default;
+        if (_measurePvs)
+            data.Timing = new PvsSessionTiming { Tick = _gameTiming.CurTick, Measured = true };
+
         // Medium reliable states can also outrun the 64-fragment transport window
         // at high RTT. Build a fresh state when capacity returns instead of queueing
         // a growing replay of obsolete movement. Keep the real ACK as the baseline.
@@ -68,6 +80,7 @@ internal sealed partial class PvsSystem
         if (transportBlocked || (data.LastReceivedAck < data.PendingSnapshotTick
                                  && _gameTiming.CurTick < data.SnapshotRetryTick))
         {
+            data.Timing.Deferred = true;
             // A deferred receiver must retain its unacknowledged deletion history.
             InterlockedHelper.Min(ref _oldestAck, data.LastReceivedAck.Value);
             data.ClearState();
@@ -75,7 +88,17 @@ internal sealed partial class PvsSystem
             return;
         }
 
+        var start = _measurePvs ? Stopwatch.GetTimestamp() : 0;
         var state = ComputeSessionState(data);
+        if (_measurePvs)
+        {
+            data.Timing.Build = Stopwatch.GetTimestamp() - start;
+            data.Timing.Entities = data.States.Count;
+            data.Timing.Chunks = data.Chunks.Count;
+            data.Timing.Viewers = data.Viewers.Length;
+            data.Timing.Full = data.RequestedFull || data.FromTick == GameTick.Zero;
+            data.Timing.AckLag = _gameTiming.CurTick.Value - data.LastReceivedAck.Value;
+        }
         InterlockedHelper.Min(ref _oldestAck, data.FromTick.Value);
         DebugTools.AssertEqual(data.StateStream, null);
 
@@ -83,8 +106,14 @@ internal sealed partial class PvsSystem
         // ReSharper disable once ConditionIsAlwaysTrueOrFalseAccordingToNullableAPIContract
         if (data.Session.Channel is not DummyChannel)
         {
+            start = _measurePvs ? Stopwatch.GetTimestamp() : 0;
             data.StateStream = RobustMemoryManager.GetMemoryStream();
             _serializer.SerializeDirect(data.StateStream, state);
+            if (_measurePvs)
+            {
+                data.Timing.Write = Stopwatch.GetTimestamp() - start;
+                data.Timing.Bytes = data.StateStream.Length;
+            }
         }
 
         ClearSessionState(data);

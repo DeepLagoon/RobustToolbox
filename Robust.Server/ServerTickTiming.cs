@@ -10,7 +10,7 @@ namespace Robust.Server;
 
 /// <summary>Samples elapsed time on the tick thread. Async jobs are charged only for submission and waits.</summary>
 [CVarDefs]
-internal sealed class ServerTickTiming
+internal sealed partial class ServerTickTiming
 {
     public static readonly CVarDef<bool> LogEnabled = CVarDef.Create(
         "log.tick_timing", true, CVar.SERVERONLY, "Log summaries and slow ticks for server simulation and PVS.");
@@ -78,6 +78,8 @@ internal sealed class ServerTickTiming
     {
         Enabled = enabled;
         _reset = true;
+        if (!enabled)
+            Collecting = false;
     }
 
     public void BeginTick() => BeginTick(Stopwatch.GetTimestamp());
@@ -91,6 +93,7 @@ internal sealed class ServerTickTiming
             _slowCount = 0;
             _worst = 0;
             _reset = false;
+            ResetDiagnostics();
         }
 
         Array.Clear(_sample);
@@ -98,6 +101,7 @@ internal sealed class ServerTickTiming
         _players = 0;
         _asyncPvs = false;
         Collecting = true;
+        BeginDiagnostics();
     }
 
     public void Mark(Phase phase) => Mark(phase, Stopwatch.GetTimestamp());
@@ -121,6 +125,7 @@ internal sealed class ServerTickTiming
     {
         var elapsed = now - _start;
         var budgetMs = budget.TotalMilliseconds;
+        CompleteDiagnostics();
         _sample[(int) Phase.PvsDispatch] = _phaseStart - _pvsStart;
         _samples++;
         _total += elapsed;
@@ -149,6 +154,7 @@ internal sealed class ServerTickTiming
                 _worstAsync = _asyncPvs;
                 _worstBudgetMs = budgetMs;
                 _sample.CopyTo(_worstPhases, 0);
+                CaptureSlowDiagnostics();
             }
         }
 
@@ -159,6 +165,7 @@ internal sealed class ServerTickTiming
             _slowWindowStart = now;
             _slowCount = 0;
             _worst = 0;
+            LogSlowPvs(budgetMs);
         }
 
         if (now - _summaryStart < SummaryInterval)
@@ -167,6 +174,7 @@ internal sealed class ServerTickTiming
         if (_log.IsLogLevelEnabled(LogLevel.Info))
             LogSummary(now, budgetMs);
         ResetSummary(now);
+        ResetDiagnosticSummary();
     }
 
     private void ResetSummary(long now)
@@ -186,6 +194,7 @@ internal sealed class ServerTickTiming
             $"Slow server tick: tick={_worstTick.Value} players={_worstPlayers} async_pvs={_worstAsync} over_budget_ticks={_slowCount} age_ms={(now - _worstEnded) * MillisecondsPerTimestamp:F2} elapsed_ms={_worst * MillisecondsPerTimestamp:F2} budget_ms={_worstBudgetMs:F2}");
         for (var i = 0; i < PhaseNames.Length; i++)
             msg.Append(CultureInfo.InvariantCulture, $" {PhaseNames[i]}_ms={_worstPhases[i] * MillisecondsPerTimestamp:F2}");
+        AppendSlowDiagnostics(msg);
         _log.Warning(msg.ToString());
     }
 
@@ -201,6 +210,7 @@ internal sealed class ServerTickTiming
             msg.Append(CultureInfo.InvariantCulture,
                 $" {name}_avg_ms={_sums[i] * MillisecondsPerTimestamp / _samples:F2} {name}_max_ms={_maxima[i] * MillisecondsPerTimestamp:F2}");
         }
+        AppendDiagnosticSummary(msg);
         _log.Info(msg.ToString());
     }
 }

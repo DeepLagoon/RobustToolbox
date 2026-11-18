@@ -1,4 +1,5 @@
 using System;
+using Stopwatch = System.Diagnostics.Stopwatch;
 using System.Collections.Generic;
 using System.Diagnostics.CodeAnalysis;
 using JetBrains.Annotations;
@@ -173,6 +174,8 @@ namespace Robust.Server.GameObjects
         {
             UpdateTickHistogram(histogram);
 
+            var timing = ((EntitySystemManager) EntitySysManager).UpdateTiming;
+            var started = timing != null ? Stopwatch.GetTimestamp() : 0;
             using (_entityNetHistogram?.NewTimer())
             {
                 while (_queue.Count != 0 && _queue.Peek().SourceTick <= _gameTiming.CurTick)
@@ -180,6 +183,7 @@ namespace Robust.Server.GameObjects
                     DispatchEntityNetworkMessage(_queue.Take());
                 }
             }
+            timing?.Invoke("engine.EntityNet", Stopwatch.GetTimestamp() - started);
 
             if (_lateMessageCount > 0 && _gameTiming.RealTime >= _nextLateMessageLog)
             {

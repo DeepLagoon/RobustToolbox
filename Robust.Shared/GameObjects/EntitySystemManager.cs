@@ -69,6 +69,9 @@ namespace Robust.Shared.GameObjects
 
         public bool MetricsEnabled { get; set; }
 
+        // Set by the server only. Client updates keep the callback disabled.
+        internal Action<string, long>? UpdateTiming;
+
         /// <inheritdoc />
         public event EventHandler<SystemChangedArgs>? SystemLoaded;
 
@@ -224,6 +227,7 @@ namespace Robust.Shared.GameObjects
                     {
                         System = s,
                         ProfileName = profileName,
+                        TimingName = s.GetType().FullName ?? profileName,
                         Monitor = _tickUsageHistogram.WithLabels(profileName)
                     };
                 })
@@ -334,21 +338,25 @@ namespace Robust.Shared.GameObjects
                 {
                     _stopwatch.Restart();
                 }
-#if EXCEPTION_TOLERANCE
+                var timing = UpdateTiming;
+                var started = timing != null ? Stopwatch.GetTimestamp() : 0;
                 try
                 {
-#endif
                     using (_profManager.Value(updReg.ProfileName))
                     {
                         updReg.System.Update(frameTime);
                     }
-#if EXCEPTION_TOLERANCE
                 }
+#if EXCEPTION_TOLERANCE
                 catch (Exception e)
                 {
                     _runtimeLog.LogException(e, "entsys");
                 }
 #endif
+                finally
+                {
+                    timing?.Invoke(updReg.TimingName, Stopwatch.GetTimestamp() - started);
+                }
 
                 if (MetricsEnabled)
                 {
@@ -454,6 +462,7 @@ namespace Robust.Shared.GameObjects
         {
             [ViewVariables] public IEntitySystem System;
             [ViewVariables] public string ProfileName;
+            public string TimingName;
             [ViewVariables] public Histogram.Child Monitor;
 
             public override string? ToString()

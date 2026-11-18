@@ -107,7 +107,7 @@ internal sealed partial class PvsSystem : EntitySystem
     /// The sessions that are currently being processed. Note that this is in general used by parallel & async tasks.
     /// Hence player disconnection processing is deferred and only run via <see cref="ProcessDisconnections"/>.
     /// </summary>
-    private PvsSession[] _sessions = default!;
+    private PvsSession[] _sessions = Array.Empty<PvsSession>();
 
     private bool _async;
 
@@ -219,6 +219,7 @@ internal sealed partial class PvsSystem : EntitySystem
         timing?.Mark(ServerTickTiming.Phase.PvsVisibilityAndAcks);
 
         // Construct & serialize the game state for each player (and update the replay).
+        _measurePvs = timing?.Collecting == true;
         SerializeStates();
         timing?.Mark(ServerTickTiming.Phase.PvsSerialize);
 
@@ -474,6 +475,15 @@ internal sealed partial class PvsSystem : EntitySystem
         WaitSendTask();
         WaitLeaveTask();
         timing?.Mark(ServerTickTiming.Phase.PvsWaitPrevious);
+        foreach (var session in _sessions)
+        {
+            if (!session.Timing.Measured)
+                continue;
+            timing?.RecordPvs(in session.Timing);
+            session.Timing = default;
+        }
+        timing?.RecordPvsReplay(_replayTiming);
+        _replayTiming = 0;
 
         foreach (var session in _disconnected)
         {

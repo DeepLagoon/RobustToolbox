@@ -20,6 +20,7 @@ namespace Robust.Server.GameStates;
 /// </summary>
 internal sealed class PvsSession(ICommonSession session, ResizableMemoryRegion<PvsData> memoryRegion)
 {
+    public PvsSessionTiming Timing;
 #if DEBUG
     public HashSet<NetEntity> ToSendSet = new();
 #endif

@@ -6,6 +6,7 @@ using Robust.Shared.Player;
 using Robust.Shared.Threading;
 using Robust.Shared.Timing;
 using Robust.Shared.Utility;
+using Stopwatch = System.Diagnostics.Stopwatch;
 
 namespace Robust.Server.GameStates;
 
@@ -36,6 +37,20 @@ internal sealed partial class PvsSystem
 
     private void SendSessionState(PvsSession data, ZStdCompressionContext ctx, GameTick sendTick)
     {
+        var start = data.Timing.Measured ? Stopwatch.GetTimestamp() : 0;
+        try
+        {
+            SendSessionStateCore(data, ctx, sendTick);
+        }
+        finally
+        {
+            if (data.Timing.Measured)
+                data.Timing.Send = Stopwatch.GetTimestamp() - start;
+        }
+    }
+
+    private void SendSessionStateCore(PvsSession data, ZStdCompressionContext ctx, GameTick sendTick)
+    {
         // Ensure it gets disposed if any exceptions happen.
         using var stateStream = data.StateStream;
         data.StateStream = null;
@@ -60,6 +75,8 @@ internal sealed partial class PvsSystem
             };
 
             _netMan.ServerSendMessage(msg, data.Session.Channel);
+            if (data.Timing.Measured && msg.HasWritten)
+                data.Timing.WireBytes = msg.MsgSize;
             // The channel can disconnect between our check and the network manager's check.
             if (msg.HasWritten && msg.ShouldSendReliably())
             {

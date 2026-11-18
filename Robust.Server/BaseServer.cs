@@ -555,7 +555,12 @@ namespace Robust.Server
             _uptimeStopwatch.Start();
 
             _tickTiming.Initialize(_log.GetSawmill("srv.tick_timing"));
-            _config.OnValueChanged(ServerTickTiming.LogEnabled, _tickTiming.SetEnabled, true);
+            _config.OnValueChanged(ServerTickTiming.LogEnabled, enabled =>
+            {
+                _tickTiming.SetEnabled(enabled);
+                ((EntitySystemManager) _entityManager.EntitySysManager).UpdateTiming =
+                    enabled ? _tickTiming.RecordSystem : null;
+            }, true);
 
             _mainLoop.Input += (sender, args) => Input(args);
 

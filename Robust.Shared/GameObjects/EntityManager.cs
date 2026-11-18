@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
+using Stopwatch = System.Diagnostics.Stopwatch;
 using System.Diagnostics.CodeAnalysis;
 using System.Linq;
 using System.Runtime.CompilerServices;
@@ -271,23 +272,30 @@ namespace Robust.Shared.GameObjects
                 _entitySystemManager.TickUpdate(frameTime, noPredictions);
             }
 
+            var timing = ((EntitySystemManager) _entitySystemManager).UpdateTiming;
+            var started = timing != null ? Stopwatch.GetTimestamp() : 0;
             using (_entityEventBusHistogram?.NewTimer())
             using (_prof.Group("Events"))
             {
                 EventBusInternal.ProcessEventQueue();
             }
+            timing?.Invoke("engine.EntityEventBus", Stopwatch.GetTimestamp() - started);
 
+            started = timing != null ? Stopwatch.GetTimestamp() : 0;
             using (_queuedDeletionHistogram?.NewTimer())
             using (_prof.Group("QueueDel"))
             {
                 ProcessQueueudDeletions();
             }
+            timing?.Invoke("engine.QueuedDeletion", Stopwatch.GetTimestamp() - started);
 
+            started = timing != null ? Stopwatch.GetTimestamp() : 0;
             using (_componentCullHistogram?.NewTimer())
             using (_prof.Group("ComponentCull"))
             {
                 CullRemovedComponents();
             }
+            timing?.Invoke("engine.ComponentCull", Stopwatch.GetTimestamp() - started);
         }
 
         private void UpdateTickHistogram(Histogram? histogram)
