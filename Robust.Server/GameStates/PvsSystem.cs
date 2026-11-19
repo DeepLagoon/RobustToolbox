@@ -220,6 +220,10 @@ internal sealed partial class PvsSystem : EntitySystem
 
         // Construct & serialize the game state for each player (and update the replay).
         _measurePvs = timing?.Collecting == true;
+        _detailPvs = _measurePvs && timing!.DetailLevel > 0;
+        _pvsDiagnosticGeneration = timing?.CaptureGeneration ?? 0;
+        _componentSampleSession = _detailPvs && timing!.DetailLevel >= 2 && _sessions.Length > 0
+            ? (int)(_gameTiming.CurTick.Value % (uint)_sessions.Length) : -2;
         SerializeStates();
         timing?.Mark(ServerTickTiming.Phase.PvsSerialize);
 

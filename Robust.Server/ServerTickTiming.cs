@@ -71,14 +71,20 @@ internal sealed partial class ServerTickTiming
 
     public bool Enabled { get; private set; }
     public bool Collecting { get; private set; }
+    private bool _basicEnabled;
+    public int CaptureGeneration { get; private set; }
+    private Robust.Shared.GameObjects.IComponentFactory? _componentFactory;
 
-    public void Initialize(ISawmill log) => _log = log;
+    public void Initialize(ISawmill log, Robust.Shared.GameObjects.IComponentFactory? factory = null)
+    { _log = log; _componentFactory = factory; }
 
     public void SetEnabled(bool enabled)
     {
-        Enabled = enabled;
+        _basicEnabled = enabled;
+        CaptureGeneration++;
+        Enabled = enabled || DetailLevel > 0;
         _reset = true;
-        if (!enabled)
+        if (!Enabled)
             Collecting = false;
     }
 
@@ -126,6 +132,7 @@ internal sealed partial class ServerTickTiming
         var elapsed = now - _start;
         var budgetMs = budget.TotalMilliseconds;
         CompleteDiagnostics();
+        RecordPerformanceTick(elapsed);
         _sample[(int) Phase.PvsDispatch] = _phaseStart - _pvsStart;
         _samples++;
         _total += elapsed;
@@ -158,7 +165,7 @@ internal sealed partial class ServerTickTiming
             }
         }
 
-        if (now - _slowWindowStart >= SlowInterval)
+        if (now - _slowWindowStart >= (DetailLevel > 0 ? _detailSlowInterval : SlowInterval))
         {
             if (_slowCount > 0 && _log.IsLogLevelEnabled(LogLevel.Warning))
                 LogSlowTick(now);
@@ -168,11 +175,14 @@ internal sealed partial class ServerTickTiming
             LogSlowPvs(budgetMs);
         }
 
-        if (now - _summaryStart < SummaryInterval)
+        if (now - _summaryStart < (DetailLevel > 0 ? _detailSummaryInterval : SummaryInterval))
             return;
 
         if (_log.IsLogLevelEnabled(LogLevel.Info))
+        {
             LogSummary(now, budgetMs);
+            LogPerformanceDetails(now);
+        }
         ResetSummary(now);
         ResetDiagnosticSummary();
     }
@@ -195,6 +205,7 @@ internal sealed partial class ServerTickTiming
         for (var i = 0; i < PhaseNames.Length; i++)
             msg.Append(CultureInfo.InvariantCulture, $" {PhaseNames[i]}_ms={_worstPhases[i] * MillisecondsPerTimestamp:F2}");
         AppendSlowDiagnostics(msg);
+        AppendSlowPerformanceDetails(msg);
         _log.Warning(msg.ToString());
     }
 

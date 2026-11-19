@@ -71,6 +71,7 @@ namespace Robust.Shared.GameObjects
 
         // Set by the server only. Client updates keep the callback disabled.
         internal Action<string, long>? UpdateTiming;
+        internal Action<string, long, bool>? UpdateAllocationTiming;
 
         /// <inheritdoc />
         public event EventHandler<SystemChangedArgs>? SystemLoaded;
@@ -339,12 +340,16 @@ namespace Robust.Shared.GameObjects
                     _stopwatch.Restart();
                 }
                 var timing = UpdateTiming;
+                var allocationTiming = UpdateAllocationTiming;
+                var allocated = allocationTiming != null ? GC.GetAllocatedBytesForCurrentThread() : 0;
                 var started = timing != null ? Stopwatch.GetTimestamp() : 0;
+                var completed = false;
                 try
                 {
                     using (_profManager.Value(updReg.ProfileName))
                     {
                         updReg.System.Update(frameTime);
+                        completed = true;
                     }
                 }
 #if EXCEPTION_TOLERANCE
@@ -355,7 +360,9 @@ namespace Robust.Shared.GameObjects
 #endif
                 finally
                 {
+                    var callAllocated = allocationTiming != null ? Math.Max(0, GC.GetAllocatedBytesForCurrentThread() - allocated) : 0;
                     timing?.Invoke(updReg.TimingName, Stopwatch.GetTimestamp() - started);
+                    allocationTiming?.Invoke(updReg.TimingName, callAllocated, !completed);
                 }
 
                 if (MetricsEnabled)

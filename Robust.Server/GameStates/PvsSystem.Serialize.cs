@@ -18,6 +18,9 @@ internal sealed partial class PvsSystem
 {
     [Dependency] private IRobustSerializer _serializer = default!;
     private bool _measurePvs;
+    private bool _detailPvs;
+    private int _componentSampleSession = -2;
+    private int _pvsDiagnosticGeneration;
     private long _replayTiming;
 
     /// <summary>
@@ -42,7 +45,7 @@ internal sealed partial class PvsSystem
             ServerGameStateManager.PvsEventSource.Log.WorkStart(_gameTiming.CurTick.Value, i, guid);
 
             if (i >= 0)
-                SerializeSessionState(_sessions[i]);
+                SerializeSessionState(_sessions[i], i == _componentSampleSession);
             else
             {
                 var start = _measurePvs ? Stopwatch.GetTimestamp() : 0;
@@ -66,11 +69,18 @@ internal sealed partial class PvsSystem
     /// <summary>
     /// Get and serialize a <see cref="GameState"/> for a single session.
     /// </summary>
-    private void SerializeSessionState(PvsSession data)
+    private void SerializeSessionState(PvsSession data, bool sampleComponents = false)
     {
         data.Timing = default;
         if (_measurePvs)
-            data.Timing = new PvsSessionTiming { Tick = _gameTiming.CurTick, Measured = true };
+            data.Timing = new PvsSessionTiming
+            {
+                Tick = _gameTiming.CurTick, Measured = true, Detailed = _detailPvs,
+                Generation = _pvsDiagnosticGeneration, SampleComponents = sampleComponents,
+            };
+        // This session's previous worker result has already been consumed after WaitSendTask.
+        data.ComponentTimings?.Clear();
+        if (sampleComponents) data.Timing.Components = data.ComponentTimings ??= new();
 
         // Medium reliable states can also outrun the 64-fragment transport window
         // at high RTT. Build a fresh state when capacity returns instead of queueing

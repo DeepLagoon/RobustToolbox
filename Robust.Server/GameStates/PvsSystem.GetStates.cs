@@ -7,6 +7,7 @@ using Robust.Shared.GameStates;
 using Robust.Shared.Player;
 using Robust.Shared.Timing;
 using Robust.Shared.Utility;
+using Stopwatch = System.Diagnostics.Stopwatch;
 
 namespace Robust.Server.GameStates;
 
@@ -21,7 +22,7 @@ internal sealed partial class PvsSystem
     /// <param name="fromTick">Only provide delta changes from this tick.</param>
     /// <param name="meta">The entity's metadata component</param>
     /// <returns>New entity State for the given entity.</returns>
-    private EntityState GetEntityState(ICommonSession? player, EntityUid entityUid, GameTick fromTick, MetaDataComponent meta)
+    private EntityState GetEntityState(ICommonSession? player, EntityUid entityUid, GameTick fromTick, MetaDataComponent meta, PvsSession? diagnostics = null)
     {
         var changed = GetComponentChangeList(meta.NetComponents.Count);
 
@@ -52,12 +53,12 @@ internal sealed partial class PvsSystem
             if (component.SessionSpecific && player != null && !EntityManager.CanGetComponentState(component, player))
                 continue;
 
-            var state = ComponentState(entityUid, component, netId, ref stateEv, out var excludeReplays);
+            var state = ComponentState(entityUid, component, netId, ref stateEv, out var excludeReplays, diagnostics);
 
             if (state is IComponentDeltaState && fromTick <= component.CreationTick)
             {
                 var fullStateEv = new ComponentGetState(player, GameTick.Zero);
-                state = ComponentState(entityUid, component, netId, ref fullStateEv, out excludeReplays);
+                state = ComponentState(entityUid, component, netId, ref fullStateEv, out excludeReplays, diagnostics);
             }
 
             if (excludeReplays && player == null)
@@ -82,24 +83,49 @@ internal sealed partial class PvsSystem
         return entState;
     }
 
-    private IComponentState? ComponentState(EntityUid uid, IComponent comp, ushort netId, ref ComponentGetState stateEv, out bool excludeReplays)
+    private IComponentState? ComponentState(EntityUid uid, IComponent comp, ushort netId, ref ComponentGetState stateEv, out bool excludeReplays, PvsSession? diagnostics = null)
     {
         DebugTools.Assert(comp.NetSyncEnabled, $"Attempting to get component state for an un-synced component: {comp.GetType()}");
         // Reset the ComponentGetState data.
         stateEv.State = null;
         stateEv.ExcludeReplays = false;
 
+        var record = diagnostics?.Timing.Detailed == true;
+        var sample = record && diagnostics!.Timing.SampleComponents &&
+            (++diagnostics.Timing.ComponentCandidates & 7) == (diagnostics.Timing.Tick.Value & 7) &&
+            diagnostics.Timing.ComponentSamples < 64;
+        var started = sample ? Stopwatch.GetTimestamp() : 0;
         _getStateHandlers![netId]?.Invoke(uid, comp, ref Unsafe.As<ComponentGetState, EntityEventBus.Unit>(ref stateEv));
+        var elapsed = sample ? Stopwatch.GetTimestamp() - started : 0;
 
         var state = stateEv.State;
         excludeReplays = stateEv.ExcludeReplays;
+        if (record)
+        {
+            ref var timing = ref diagnostics!.Timing;
+            timing.ComponentCalls++;
+            if (state == null) timing.NullStates++;
+            if (state is IComponentDeltaState) timing.DeltaStates++;
+            if (comp is IComponentDelta delta && delta.LastUnclassifiedDirty > stateEv.FromTick) timing.UnclassifiedStates++;
+            if (comp is TransformComponent) timing.TransformStates++;
+            if (comp is Robust.Shared.Physics.Components.PhysicsComponent) timing.PhysicsStates++;
+            if (sample)
+            {
+                timing.ComponentSamples++;
+                var stats = timing.Components!.GetValueOrDefault(netId);
+                stats.Elapsed += elapsed;
+                stats.Samples++;
+                if (elapsed > stats.Maximum) { stats.Maximum = elapsed; stats.WorstEntity = uid; }
+                timing.Components[netId] = stats;
+            }
+        }
         return state;
     }
 
     /// <summary>
     /// Variant of <see cref="GetEntityState"/> that includes all entity data, including data that can be inferred implicitly from the entity prototype.
     /// </summary>
-    private EntityState GetFullEntityState(ICommonSession player, EntityUid entityUid, MetaDataComponent meta)
+    private EntityState GetFullEntityState(ICommonSession player, EntityUid entityUid, MetaDataComponent meta, PvsSession? diagnostics = null)
     {
         var bus = EntityManager.EventBusInternal;
         var changed = GetComponentChangeList(meta.NetComponents.Count);
@@ -117,7 +143,7 @@ internal sealed partial class PvsSystem
             if (component.SessionSpecific && !EntityManager.CanGetComponentState(bus, component, player))
                 continue;
 
-            var state = ComponentState(entityUid, component, netId, ref stateEv, out _);
+            var state = ComponentState(entityUid, component, netId, ref stateEv, out _, diagnostics);
             DebugTools.Assert(state is not IComponentDeltaState);
             changed.Add(new ComponentChange(netId, state, component.LastModifiedTick));
             netComps.Add(netId);
@@ -174,8 +200,8 @@ internal sealed partial class PvsSystem
 
                 // Full-state requests must include implicit prototype-backed component data, not just deltas.
                 var state = pvsSession.RequestedFull && session != null
-                    ? GetFullEntityState(session, uid, md)
-                    : GetEntityState(session, uid, fromTick, md);
+                    ? GetFullEntityState(session, uid, md, _detailPvs ? pvsSession : null)
+                    : GetEntityState(session, uid, fromTick, md, _detailPvs ? pvsSession : null);
 
                 if (state.Empty)
                 {
@@ -210,7 +236,7 @@ Transform last modified: {Transform(uid).LastModifiedTick}");
                     DebugTools.Assert(md.EntityLastModifiedTick >= md.CreationTick, $"Entity {ToPrettyString(uid)} last modified tick is less than creation tick");
                     DebugTools.Assert(md.EntityLastModifiedTick > fromTick, $"Entity {ToPrettyString(uid)} last modified tick is less than from tick");
 
-                    var state = GetEntityState(session, uid, fromTick, md);
+                    var state = GetEntityState(session, uid, fromTick, md, _detailPvs ? pvsSession : null);
 
                     if (state.Empty)
                     {
@@ -238,7 +264,7 @@ Transform last modified: {Transform(uid).LastModifiedTick}");
                     DebugTools.Assert(md.EntityLastModifiedTick >= md.CreationTick, $"Entity {ToPrettyString(uid)} last modified tick is less than creation tick");
                     DebugTools.Assert(md.EntityLastModifiedTick > fromTick, $"Entity {ToPrettyString(uid)} last modified tick is less than from tick");
 
-                    var state = GetEntityState(session, uid, fromTick, md);
+                    var state = GetEntityState(session, uid, fromTick, md, _detailPvs ? pvsSession : null);
                     if (!state.Empty)
                         AddOrderedState(pvsSession, state, md, ref chunkStates);
                     else

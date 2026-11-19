@@ -285,6 +285,7 @@ namespace Robust.Shared.GameObjects
             using (_queuedDeletionHistogram?.NewTimer())
             using (_prof.Group("QueueDel"))
             {
+                DiagnosticWorkTiming?.Invoke("engine.deletion_queue_before", 0, QueuedDeletionsSet.Count);
                 ProcessQueueudDeletions();
             }
             timing?.Invoke("engine.QueuedDeletion", Stopwatch.GetTimestamp() - started);
@@ -395,6 +396,9 @@ namespace Robust.Shared.GameObjects
 
         /// <inheritdoc />
         public int EntityCount => Entities.Count;
+        /// <summary>Unique entities currently waiting for queued deletion; no entity traversal.</summary>
+        public int QueuedDeletionCount => QueuedDeletionsSet.Count;
+        public Action<string, long, int>? DiagnosticWorkTiming;
 
         /// <inheritdoc />
         public IEnumerable<EntityUid> GetEntities() => Entities;

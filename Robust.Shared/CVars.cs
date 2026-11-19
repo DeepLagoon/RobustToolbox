@@ -22,6 +22,16 @@ namespace Robust.Shared
             throw new InvalidOperationException("This class must not be instantiated");
         }
 
+        /// <summary>Additional server diagnostics: 0 off, 1 phase/ranking summaries, 2 bounded component samples and main-thread allocation attribution.</summary>
+        public static readonly CVarDef<int> PerformanceLogLevel =
+            CVarDef.Create("log.perf_diagnostics", 0, CVar.SERVERONLY);
+        public static readonly CVarDef<float> PerformanceLogInterval =
+            CVarDef.Create("log.perf_interval", 30f, CVar.SERVERONLY);
+        public static readonly CVarDef<float> PerformanceSlowInterval =
+            CVarDef.Create("log.perf_slow_interval", 10f, CVar.SERVERONLY);
+        public static readonly CVarDef<int> PerformanceTopCount =
+            CVarDef.Create("log.perf_top", 20, CVar.SERVERONLY);
+
         /*
          * NET
          */

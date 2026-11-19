@@ -93,14 +93,14 @@ internal sealed partial class PvsSystem
 
         if (session.RequestedFull)
         {
-            var state = GetFullEntityState(session.Session, ent.Uid, ent.Meta);
+            var state = GetFullEntityState(session.Session, ent.Uid, ent.Meta, _detailPvs ? session : null);
             session.States.Add(state);
             return;
         }
 
         if (entered)
         {
-            var state = GetEntityState(session.Session, ent.Uid, data.EntityLastAcked, ent.Meta);
+            var state = GetEntityState(session.Session, ent.Uid, data.EntityLastAcked, ent.Meta, _detailPvs ? session : null);
             session.States.Add(state);
             return;
         }
@@ -108,7 +108,7 @@ internal sealed partial class PvsSystem
         if (meta.LastModifiedTick <= fromTick)
             return;
 
-        var entState = GetEntityState(session.Session, ent.Uid, fromTick , ent.Meta);
+        var entState = GetEntityState(session.Session, ent.Uid, fromTick , ent.Meta, _detailPvs ? session : null);
 
         if (!entState.Empty)
             session.States.Add(entState);
@@ -172,14 +172,14 @@ internal sealed partial class PvsSystem
 
         if (session.RequestedFull)
         {
-            var state = GetFullEntityState(session.Session, uid, meta);
+            var state = GetFullEntityState(session.Session, uid, meta, _detailPvs ? session : null);
             session.States.Add(state);
             return true;
         }
 
         if (entered)
         {
-            var state = GetEntityState(session.Session, uid, data.EntityLastAcked, meta);
+            var state = GetEntityState(session.Session, uid, data.EntityLastAcked, meta, _detailPvs ? session : null);
             session.States.Add(state);
             return true;
         }
@@ -187,7 +187,7 @@ internal sealed partial class PvsSystem
         if (meta.EntityLastModifiedTick <= fromTick)
             return true;
 
-        var entState = GetEntityState(session.Session, uid, fromTick , meta);
+        var entState = GetEntityState(session.Session, uid, fromTick , meta, _detailPvs ? session : null);
 
         if (!entState.Empty)
             session.States.Add(entState);

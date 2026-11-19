@@ -21,6 +21,8 @@ namespace Robust.Shared.Physics.Systems
 {
     public abstract partial class SharedPhysicsSystem : EntitySystem
     {
+        /// <summary>Optional server tick-thread measurements. Null on clients and when detailed logging is disabled.</summary>
+        public Action<string, long, int>? DiagnosticTiming;
         /*
          * TODO:
 
@@ -258,6 +260,7 @@ namespace Robust.Shared.Physics.Systems
         protected void SimulateWorld(float deltaTime, bool prediction)
         {
             var substeps = GetGridMotionSubsteps(deltaTime, prediction);
+            DiagnosticTiming?.Invoke("physics.initial_substeps", 0, substeps);
             _prof.WriteValue("Initial physics substeps", substeps);
             if (substeps > Math.Max(1, _substeps) && _netMan.IsServer && _cfg.GetCVar(CVars.LocalGridSubsteps))
             {
@@ -334,28 +337,41 @@ namespace Robust.Shared.Physics.Systems
 
         private void BeforePhysicsStep(bool prediction, float frameTime)
         {
+            var diagnostic = DiagnosticTiming;
+            var start = diagnostic != null ? System.Diagnostics.Stopwatch.GetTimestamp() : 0;
             using var group = _prof.Group("PreSolve", Color.Green);
             var update = new PhysicsUpdateBeforeSolveEvent(prediction, frameTime);
             RaiseLocalEvent(ref update);
+            diagnostic?.Invoke("physics.pre_solve", System.Diagnostics.Stopwatch.GetTimestamp() - start, AwakeBodies.Count);
         }
 
         private void AfterPhysicsStep(bool prediction, float frameTime)
         {
+            var diagnostic = DiagnosticTiming;
+            var start = diagnostic != null ? System.Diagnostics.Stopwatch.GetTimestamp() : 0;
             using var group = _prof.Group("PostSolve", Color.Yellow);
             var update = new PhysicsUpdateAfterSolveEvent(prediction, frameTime);
             RaiseLocalEvent(ref update);
+            diagnostic?.Invoke("physics.post_solve", System.Diagnostics.Stopwatch.GetTimestamp() - start, 0);
         }
 
         private void FindPhysicsContacts()
         {
+            var diagnostic = DiagnosticTiming;
+            var start = diagnostic != null ? System.Diagnostics.Stopwatch.GetTimestamp() : 0;
             using var group = _prof.Group("Broadphase", Color.Cyan);
             _broadphase.FindNewContacts();
+            diagnostic?.Invoke("physics.broadphase", System.Diagnostics.Stopwatch.GetTimestamp() - start, 0);
         }
 
         private bool UpdatePhysicsContacts(SubstepScope scope)
         {
+            var diagnostic = DiagnosticTiming;
+            var start = diagnostic != null ? System.Diagnostics.Stopwatch.GetTimestamp() : 0;
             using var group = _prof.Group("Collide", Color.Orange);
-            return CollideContacts(scope);
+            var result = CollideContacts(scope);
+            diagnostic?.Invoke("physics.collide", System.Diagnostics.Stopwatch.GetTimestamp() - start, ContactCount);
+            return result;
         }
 
         private void SolvePhysicsStep(bool prediction, float frameTime, SubstepScope scope = default, bool clearForces = true)
@@ -366,8 +382,11 @@ namespace Robust.Shared.Physics.Systems
 
         private void SolvePhysicsIslands(bool prediction, float frameTime, SubstepScope scope, bool clearForces)
         {
+            var diagnostic = DiagnosticTiming;
+            var start = diagnostic != null ? System.Diagnostics.Stopwatch.GetTimestamp() : 0;
             using var group = _prof.Group("Solve", Color.Red);
             Step(frameTime, prediction, scope, clearForces);
+            diagnostic?.Invoke("physics.solve", System.Diagnostics.Stopwatch.GetTimestamp() - start, 0);
         }
 
         protected virtual void FinalStep()

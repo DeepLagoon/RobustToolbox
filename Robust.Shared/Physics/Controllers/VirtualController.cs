@@ -21,6 +21,8 @@ namespace Robust.Shared.Physics.Controllers
         private static readonly Stopwatch Stopwatch = new();
 
         private string _zoneName = string.Empty;
+        private string _diagnosticBefore = string.Empty;
+        private string _diagnosticAfter = string.Empty;
 
         public Histogram.Child BeforeMonitor = default!;
         public Histogram.Child AfterMonitor = default!;
@@ -34,6 +36,8 @@ namespace Robust.Shared.Physics.Controllers
             BeforeMonitor = SharedPhysicsSystem.TickUsageControllerBeforeSolveHistogram.WithLabels(GetType().Name);
             AfterMonitor = SharedPhysicsSystem.TickUsageControllerAfterSolveHistogram.WithLabels(GetType().Name);
             _zoneName = GetType().Name;
+            _diagnosticBefore = "controller.before." + GetType().FullName;
+            _diagnosticAfter = "controller.after." + GetType().FullName;
 
             var updatesBefore = UpdatesBefore.ToArray();
             var updatesAfter = UpdatesAfter.ToArray();
@@ -44,6 +48,8 @@ namespace Robust.Shared.Physics.Controllers
 
         private void OnBeforeSolve(ref PhysicsUpdateBeforeSolveEvent ev)
         {
+            var diagnostic = PhysicsSystem.DiagnosticTiming;
+            var started = diagnostic != null ? System.Diagnostics.Stopwatch.GetTimestamp() : 0;
             if(PhysicsSystem.MetricsEnabled)
                 Stopwatch.Restart();
 
@@ -54,10 +60,13 @@ namespace Robust.Shared.Physics.Controllers
 
             if(PhysicsSystem.MetricsEnabled)
                 BeforeMonitor.Observe(Stopwatch.Elapsed.TotalSeconds);
+            diagnostic?.Invoke(_diagnosticBefore, System.Diagnostics.Stopwatch.GetTimestamp() - started, 0);
         }
 
         private void OnAfterSolve(ref PhysicsUpdateAfterSolveEvent ev)
         {
+            var diagnostic = PhysicsSystem.DiagnosticTiming;
+            var started = diagnostic != null ? System.Diagnostics.Stopwatch.GetTimestamp() : 0;
             if(PhysicsSystem.MetricsEnabled)
                 Stopwatch.Restart();
 
@@ -68,6 +77,7 @@ namespace Robust.Shared.Physics.Controllers
 
             if(PhysicsSystem.MetricsEnabled)
                 AfterMonitor.Observe(Stopwatch.Elapsed.TotalSeconds);
+            diagnostic?.Invoke(_diagnosticAfter, System.Diagnostics.Stopwatch.GetTimestamp() - started, 0);
         }
 
         #endregion

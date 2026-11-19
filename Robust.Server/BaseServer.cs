@@ -554,13 +554,18 @@ namespace Robust.Server
 
             _uptimeStopwatch.Start();
 
-            _tickTiming.Initialize(_log.GetSawmill("srv.tick_timing"));
+            _tickTiming.Initialize(_log.GetSawmill("srv.tick_timing"), _entityManager.ComponentFactory);
+            _tickTiming.SetContextSource(() => FormattableString.Invariant(
+                $"entities_end={_entityManager.EntityCount} deletion_queue_end={((EntityManager)_entityManager).QueuedDeletionCount} physics_registry_end={_entityManager.Count<Robust.Shared.Physics.Components.PhysicsComponent>()} audio_registry_end={_entityManager.Count<Robust.Shared.Audio.Components.AudioComponent>()} timed_despawn_registry_end={_entityManager.Count<Robust.Shared.Spawners.TimedDespawnComponent>()}"));
             _config.OnValueChanged(ServerTickTiming.LogEnabled, enabled =>
             {
                 _tickTiming.SetEnabled(enabled);
-                ((EntitySystemManager) _entityManager.EntitySysManager).UpdateTiming =
-                    enabled ? _tickTiming.RecordSystem : null;
+                ConfigurePerformanceObservers();
             }, true);
+            _config.OnValueChanged(CVars.PerformanceLogLevel, _ => ConfigurePerformanceLogging(), true);
+            _config.OnValueChanged(CVars.PerformanceLogInterval, _ => ConfigurePerformanceLogging(), true);
+            _config.OnValueChanged(CVars.PerformanceSlowInterval, _ => ConfigurePerformanceLogging(), true);
+            _config.OnValueChanged(CVars.PerformanceTopCount, _ => ConfigurePerformanceLogging(), true);
 
             _mainLoop.Input += (sender, args) => Input(args);
 

@@ -321,23 +321,30 @@ public abstract partial class SharedPhysicsSystem
 
     private void Solve(float frameTime, float dtRatio, float invDt, bool prediction, SubstepScope scope)
     {
+        var diagnostic = DiagnosticTiming;
+        var started = diagnostic != null ? System.Diagnostics.Stopwatch.GetTimestamp() : 0;
         _islands.Clear();
         using (_prof.Group("Build Islands"))
         {
             BuildIslands(prediction, scope);
         }
+        diagnostic?.Invoke("physics.build_islands", System.Diagnostics.Stopwatch.GetTimestamp() - started, _islands.Count);
 
+        started = diagnostic != null ? System.Diagnostics.Stopwatch.GetTimestamp() : 0;
         using (_prof.Group("Solve Islands"))
         {
             SolveIslands(frameTime, dtRatio, invDt, prediction);
         }
+        diagnostic?.Invoke("physics.solve_islands", System.Diagnostics.Stopwatch.GetTimestamp() - started, _islands.Count);
 
+        started = diagnostic != null ? System.Diagnostics.Stopwatch.GetTimestamp() : 0;
         foreach (var island in _islands)
         {
             ReturnIsland(island);
         }
 
         Cleanup(frameTime);
+        diagnostic?.Invoke("physics.cleanup", System.Diagnostics.Stopwatch.GetTimestamp() - started, 0);
     }
 
     private void BuildIslands(bool prediction, SubstepScope scope)
@@ -732,9 +739,13 @@ public abstract partial class SharedPhysicsSystem
         _solveIslandsJob.BatchSize = Math.Clamp(islands.Length / (Environment.ProcessorCount * 4), 1, 32);
 
         _prof.WriteValue("Physics islands", islands.Length);
+        var diagnostic = DiagnosticTiming;
+        var started = diagnostic != null ? System.Diagnostics.Stopwatch.GetTimestamp() : 0;
         using (_prof.Group("Island jobs"))
             _parallel.ProcessNow(_solveIslandsJob, islands.Length);
+        diagnostic?.Invoke("physics.island_jobs_and_wait", System.Diagnostics.Stopwatch.GetTimestamp() - started, totalBodies);
 
+        started = diagnostic != null ? System.Diagnostics.Stopwatch.GetTimestamp() : 0;
         // Apply updates and deliver ECS events in island and body order.
         if (preparedMoves != null)
             _lookup.BeginPreparedFixtureMoves(preparedMoves);
@@ -754,6 +765,7 @@ public abstract partial class SharedPhysicsSystem
             if (preparedMoves != null)
                 _prof.WriteValue("Prepared fixture moves", _lookup.EndPreparedFixtureMoves());
         }
+        diagnostic?.Invoke("physics.apply_body_updates", System.Diagnostics.Stopwatch.GetTimestamp() - started, totalBodies);
     }
 
     // Kept on the worker's stack and discarded before body writes or contact events.

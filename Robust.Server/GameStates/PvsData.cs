@@ -21,6 +21,7 @@ namespace Robust.Server.GameStates;
 internal sealed class PvsSession(ICommonSession session, ResizableMemoryRegion<PvsData> memoryRegion)
 {
     public PvsSessionTiming Timing;
+    public Dictionary<ushort, PvsComponentTiming>? ComponentTimings;
 #if DEBUG
     public HashSet<NetEntity> ToSendSet = new();
 #endif

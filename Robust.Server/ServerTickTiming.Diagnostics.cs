@@ -16,6 +16,8 @@ internal sealed partial class ServerTickTiming
         public long Maximum;
         public int Samples;
         public int LastSample;
+        public long TickMaximum, Allocated, AllocationMaximum;
+        public int Failures;
     }
 
     private readonly Dictionary<string, SystemTiming> _systems = new();
@@ -57,6 +59,7 @@ internal sealed partial class ServerTickTiming
         if (!_systems.TryGetValue(name, out var sample))
             _systems.Add(name, sample = new SystemTiming());
         sample.Tick = sample.LastSample == _diagnosticSample ? sample.Tick + elapsed : elapsed;
+        sample.TickMaximum = Math.Max(sample.TickMaximum, sample.Tick);
         sample.LastSample = _diagnosticSample;
         sample.Total += elapsed;
         sample.Maximum = Math.Max(sample.Maximum, elapsed);
@@ -67,6 +70,7 @@ internal sealed partial class ServerTickTiming
     {
         if (!Collecting)
             return;
+        RecordPvsPerformance(in sample);
         if (sample.Deferred)
         {
             _pvsDeferred++;
@@ -123,6 +127,7 @@ internal sealed partial class ServerTickTiming
         _slowAllocated = _tickAllocated;
         _slowPause = _tickPause;
         _tickCollections.CopyTo(_slowCollections, 0);
+        CaptureSlowPerformanceDetails();
     }
 
     private static void InsertSystem((string Name, long Elapsed)[] top, string name, long elapsed)
@@ -192,6 +197,8 @@ internal sealed partial class ServerTickTiming
         {
             sample.Total = sample.Maximum = 0;
             sample.Samples = 0;
+            sample.TickMaximum = sample.Allocated = sample.AllocationMaximum = 0;
+            sample.Failures = 0;
         }
         _allocatedBaseline = GC.GetTotalAllocatedBytes(precise: false);
         _pauseBaseline = GC.GetTotalPauseDuration();
@@ -201,6 +208,7 @@ internal sealed partial class ServerTickTiming
         _pvsBuildMax = _pvsWriteMax = _pvsSendMax = _pvsBytes = _pvsBytesMax = 0;
         _pvsWireBytes = _pvsWireBytesMax = 0;
         _pvsEntitiesMax = 0;
+        ResetPerformanceWindow();
     }
 
     private void ResetDiagnostics()
@@ -208,6 +216,7 @@ internal sealed partial class ServerTickTiming
         _systems.Clear();
         _diagnosticSample = 0;
         _slowPvs = default;
+        _detailTimings.Clear();
         Array.Clear(_slowSystems);
         ResetDiagnosticSummary();
     }
@@ -216,6 +225,11 @@ internal sealed partial class ServerTickTiming
 /// <summary>One session's completed worker measurements, consumed only after all PVS jobs have joined.</summary>
 internal struct PvsSessionTiming
 {
+    public int Generation;
+    public bool Detailed, SampleComponents;
+    public int ComponentCalls, NullStates, DeltaStates, UnclassifiedStates, TransformStates, PhysicsStates;
+    public int ComponentCandidates, ComponentSamples;
+    public Dictionary<ushort, PvsComponentTiming>? Components;
     public GameTick Tick;
     public bool Measured;
     public bool Deferred;
@@ -230,4 +244,10 @@ internal struct PvsSessionTiming
     public bool Full;
     public uint AckLag;
     public readonly long Total => Build + Write + Send;
+}
+
+internal struct PvsComponentTiming
+{
+    public long Elapsed, Maximum, Samples;
+    public Robust.Shared.GameObjects.EntityUid WorstEntity;
 }
