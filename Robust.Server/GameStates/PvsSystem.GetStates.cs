@@ -94,30 +94,46 @@ internal sealed partial class PvsSystem
         var sample = record && diagnostics!.Timing.SampleComponents &&
             (++diagnostics.Timing.ComponentCandidates & 7) == (diagnostics.Timing.Tick.Value & 7) &&
             diagnostics.Timing.ComponentSamples < 64;
+        if (record)
+        {
+            ref var timing = ref diagnostics!.Timing;
+            timing.ComponentCalls++;
+            if (comp is IComponentDelta delta && delta.LastUnclassifiedDirty > stateEv.FromTick) timing.UnclassifiedStates++;
+            if (comp is TransformComponent) timing.TransformStates++;
+            if (comp is Robust.Shared.Physics.Components.PhysicsComponent) timing.PhysicsStates++;
+        }
         var started = sample ? Stopwatch.GetTimestamp() : 0;
-        _getStateHandlers![netId]?.Invoke(uid, comp, ref Unsafe.As<ComponentGetState, EntityEventBus.Unit>(ref stateEv));
-        var elapsed = sample ? Stopwatch.GetTimestamp() - started : 0;
+        try
+        {
+            _getStateHandlers![netId]?.Invoke(uid, comp, ref Unsafe.As<ComponentGetState, EntityEventBus.Unit>(ref stateEv));
+        }
+        catch
+        {
+            if (record) diagnostics!.Timing.ComponentFailures++;
+            throw;
+        }
+        finally
+        {
+            if (sample)
+            {
+                var elapsed = Stopwatch.GetTimestamp() - started;
+                ref var measured = ref diagnostics!.Timing;
+                measured.ComponentSamples++;
+                var stats = measured.Components!.GetValueOrDefault(netId);
+                stats.Elapsed += elapsed;
+                stats.Samples++;
+                if (elapsed > stats.Maximum) { stats.Maximum = elapsed; stats.WorstEntity = uid; }
+                measured.Components[netId] = stats;
+            }
+        }
 
         var state = stateEv.State;
         excludeReplays = stateEv.ExcludeReplays;
         if (record)
         {
             ref var timing = ref diagnostics!.Timing;
-            timing.ComponentCalls++;
             if (state == null) timing.NullStates++;
             if (state is IComponentDeltaState) timing.DeltaStates++;
-            if (comp is IComponentDelta delta && delta.LastUnclassifiedDirty > stateEv.FromTick) timing.UnclassifiedStates++;
-            if (comp is TransformComponent) timing.TransformStates++;
-            if (comp is Robust.Shared.Physics.Components.PhysicsComponent) timing.PhysicsStates++;
-            if (sample)
-            {
-                timing.ComponentSamples++;
-                var stats = timing.Components!.GetValueOrDefault(netId);
-                stats.Elapsed += elapsed;
-                stats.Samples++;
-                if (elapsed > stats.Maximum) { stats.Maximum = elapsed; stats.WorstEntity = uid; }
-                timing.Components[netId] = stats;
-            }
         }
         return state;
     }

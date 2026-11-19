@@ -360,8 +360,9 @@ namespace Robust.Shared.GameObjects
 #endif
                 finally
                 {
+                    var ended = timing != null ? Stopwatch.GetTimestamp() : 0;
                     var callAllocated = allocationTiming != null ? Math.Max(0, GC.GetAllocatedBytesForCurrentThread() - allocated) : 0;
-                    timing?.Invoke(updReg.TimingName, Stopwatch.GetTimestamp() - started);
+                    timing?.Invoke(updReg.TimingName, ended - started);
                     allocationTiming?.Invoke(updReg.TimingName, callAllocated, !completed);
                 }
 

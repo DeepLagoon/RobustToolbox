@@ -131,6 +131,7 @@ internal sealed partial class ServerTickTiming
     internal void CompleteTick(GameTick tick, TimeSpan budget, long now)
     {
         var elapsed = now - _start;
+        _performanceEndTick = tick.Value;
         var budgetMs = budget.TotalMilliseconds;
         CompleteDiagnostics();
         RecordPerformanceTick(elapsed);
@@ -174,6 +175,7 @@ internal sealed partial class ServerTickTiming
             _slowCount = 0;
             _worst = 0;
             LogSlowPvs(budgetMs);
+            FlushPerformanceWarnings();
         }
 
         if (now - _summaryStart < (DetailLevel > 0 ? _detailSummaryInterval : SummaryInterval))
@@ -207,7 +209,8 @@ internal sealed partial class ServerTickTiming
             msg.Append(CultureInfo.InvariantCulture, $" {PhaseNames[i]}_ms={_worstPhases[i] * MillisecondsPerTimestamp:F2}");
         AppendSlowDiagnostics(msg);
         AppendSlowPerformanceDetails(msg);
-        _log.Warning(msg.ToString());
+        if (DetailLevel > 0) QueuePerformanceWarning(msg.ToString());
+        else _log.Warning(msg.ToString());
     }
 
     private void LogSummary(long now, double budgetMs)
@@ -223,6 +226,7 @@ internal sealed partial class ServerTickTiming
                 $" {name}_avg_ms={_sums[i] * MillisecondsPerTimestamp / _samples:F2} {name}_max_ms={_maxima[i] * MillisecondsPerTimestamp:F2}");
         }
         AppendDiagnosticSummary(msg);
-        _log.Info(msg.ToString());
+        if (DetailLevel > 0) _performanceSummaryLine = msg.ToString();
+        else _log.Info(msg.ToString());
     }
 }

@@ -8,7 +8,7 @@ internal sealed partial class ServerTickTiming
 {
     private readonly Dictionary<ushort, PvsComponentTiming> _componentSamples = new();
     private readonly List<KeyValuePair<ushort, PvsComponentTiming>> _componentRanking = new();
-    private long _componentCalls, _nullStates, _deltaStates, _unclassifiedStates, _transformStates, _physicsStates;
+    private long _componentCalls, _componentFailures, _nullStates, _deltaStates, _unclassifiedStates, _transformStates, _physicsStates;
     private long _componentCandidates, _sampledComponentCalls, _componentCategoriesDropped, _sampledPackets;
 
     private void RecordPvsPerformance(in PvsSessionTiming timing)
@@ -16,6 +16,7 @@ internal sealed partial class ServerTickTiming
         // Async work is consumed after joining. Configuration changes discard old capture data.
         if (DetailLevel == 0 || !timing.Detailed || timing.Generation != CaptureGeneration) return;
         _componentCalls += timing.ComponentCalls;
+        _componentFailures += timing.ComponentFailures;
         _nullStates += timing.NullStates;
         _deltaStates += timing.DeltaStates;
         _unclassifiedStates += timing.UnclassifiedStates;
@@ -39,14 +40,14 @@ internal sealed partial class ServerTickTiming
     private void ResetPvsPerformanceWindow()
     {
         _componentSamples.Clear();
-        _componentCalls = _nullStates = _deltaStates = _unclassifiedStates = _transformStates = _physicsStates = 0;
+        _componentCalls = _componentFailures = _nullStates = _deltaStates = _unclassifiedStates = _transformStates = _physicsStates = 0;
         _componentCandidates = _sampledComponentCalls = _componentCategoriesDropped = _sampledPackets = 0;
     }
 
     private void LogPvsPerformanceDetails()
     {
         EmitPerformanceLine(FormattableString.Invariant(
-            $"Performance PVS coverage: handler_calls={_componentCalls} null_states={_nullStates} delta_states={_deltaStates} unclassified_dirty_states={_unclassifiedStates} transform_calls={_transformStates} physics_calls={_physicsStates} timed_handler_samples={_sampledComponentCalls} candidates_in_sampled_packets={_componentCandidates} sampled_packets={_sampledPackets} sampling_stride=8 max_timed_calls_per_tick=64 categories_dropped={_componentCategoriesDropped} fallback_calls_included=True"));
+            $"Performance PVS coverage: handler_calls={_componentCalls} failed_handler_calls={_componentFailures} null_states={_nullStates} delta_states={_deltaStates} unclassified_dirty_states={_unclassifiedStates} transform_calls={_transformStates} physics_calls={_physicsStates} timed_handler_samples={_sampledComponentCalls} candidates_in_sampled_packets={_componentCandidates} sampled_packets={_sampledPackets} sampling_stride=8 max_timed_calls_per_tick=64 categories_dropped={_componentCategoriesDropped} fallback_calls_included=True"));
         _componentRanking.Clear();
         foreach (var entry in _componentSamples) _componentRanking.Add(entry);
         _componentRanking.Sort(static (a, b) => b.Value.Elapsed.CompareTo(a.Value.Elapsed));

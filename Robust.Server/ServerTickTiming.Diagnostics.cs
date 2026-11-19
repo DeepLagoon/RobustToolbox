@@ -185,8 +185,10 @@ internal sealed partial class ServerTickTiming
         // Completed async send jobs are sampled after their next join, retaining the originating tick.
         if (_slowPvs.Total * MillisecondsPerTimestamp > budgetMs && _log.IsLogLevelEnabled(LogLevel.Warning))
         {
-            _log.Warning(FormattableString.Invariant(
-                $"Slow PVS session work: tick={_slowPvs.Tick.Value} build_ms={_slowPvs.Build * MillisecondsPerTimestamp:F2} write_ms={_slowPvs.Write * MillisecondsPerTimestamp:F2} send_ms={_slowPvs.Send * MillisecondsPerTimestamp:F2} entities={_slowPvs.Entities} viewers={_slowPvs.Viewers} chunks={_slowPvs.Chunks} state_bytes={_slowPvs.Bytes} wire_bytes={_slowPvs.WireBytes} full={_slowPvs.Full} ack_lag_ticks={_slowPvs.AckLag}"));
+            var message = FormattableString.Invariant(
+                $"Slow PVS session work: tick={_slowPvs.Tick.Value} build_ms={_slowPvs.Build * MillisecondsPerTimestamp:F2} write_ms={_slowPvs.Write * MillisecondsPerTimestamp:F2} send_ms={_slowPvs.Send * MillisecondsPerTimestamp:F2} entities={_slowPvs.Entities} viewers={_slowPvs.Viewers} chunks={_slowPvs.Chunks} state_bytes={_slowPvs.Bytes} wire_bytes={_slowPvs.WireBytes} full={_slowPvs.Full} ack_lag_ticks={_slowPvs.AckLag}");
+            if (DetailLevel > 0) QueuePerformanceWarning(message);
+            else _log.Warning(message);
         }
         _slowPvs = default;
     }
@@ -227,7 +229,7 @@ internal struct PvsSessionTiming
 {
     public int Generation;
     public bool Detailed, SampleComponents;
-    public int ComponentCalls, NullStates, DeltaStates, UnclassifiedStates, TransformStates, PhysicsStates;
+    public int ComponentCalls, ComponentFailures, NullStates, DeltaStates, UnclassifiedStates, TransformStates, PhysicsStates;
     public int ComponentCandidates, ComponentSamples;
     public Dictionary<ushort, PvsComponentTiming>? Components;
     public GameTick Tick;

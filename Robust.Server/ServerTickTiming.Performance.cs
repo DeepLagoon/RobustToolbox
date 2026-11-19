@@ -28,7 +28,8 @@ internal sealed partial class ServerTickTiming
     private long _detailSlowInterval = 10 * Stopwatch.Frequency;
     private int _detailTop = 20;
     private long _detailDropped, _previousReportTicks;
-    private TimeSpan _processCpuBaseline;
+    private TimeSpan? _processCpuBaseline;
+    private uint _performanceEndTick;
     private Func<string>? _context;
 
     public int DetailLevel { get; private set; }
@@ -87,7 +88,8 @@ internal sealed partial class ServerTickTiming
         var target = Math.Max(1L, (long)Math.Ceiling(_samples * fraction));
         long count = 0;
         for (var i = 0; i < TickBuckets.Length; i++)
-            if ((count += _tickHistogram[i]) >= target) return TickBuckets[i];
+            if ((count += _tickHistogram[i]) >= target)
+                return double.IsPositiveInfinity(TickBuckets[i]) ? _max * MillisecondsPerTimestamp : TickBuckets[i];
         return 0;
     }
 
@@ -115,11 +117,14 @@ internal sealed partial class ServerTickTiming
             sample.Total = sample.Maximum = sample.Items = sample.ItemsMaximum = sample.Calls = 0;
         }
         if (DetailLevel > 0)
-        {
-            using var process = Process.GetCurrentProcess();
-            _processCpuBaseline = process.TotalProcessorTime;
-        }
+            _processCpuBaseline = ReadProcessCpu();
         ResetPvsPerformanceWindow();
+    }
+
+    private TimeSpan? ReadProcessCpu()
+    {
+        try { using var process = Process.GetCurrentProcess(); return process.TotalProcessorTime; }
+        catch (Exception) { System.Threading.Interlocked.Increment(ref _reportFailures); return null; }
     }
 
     private void LogPerformanceDetails(long now)
@@ -128,47 +133,54 @@ internal sealed partial class ServerTickTiming
         var started = Stopwatch.GetTimestamp();
         try
         {
-        using var process = Process.GetCurrentProcess();
-        var cpuMs = Math.Max(0, (process.TotalProcessorTime - _processCpuBaseline).TotalMilliseconds);
-        var wallMs = (now - _summaryStart) * MillisecondsPerTimestamp;
-        var msg = new StringBuilder(512);
-        msg.Append(CultureInfo.InvariantCulture,
-            $"Performance context: level={DetailLevel} capture_generation={CaptureGeneration} ticks={_samples} p50_upper_bucket_ms={TickPercentile(0.5):F2} p95_upper_bucket_ms={TickPercentile(0.95):F2} p99_upper_bucket_ms={TickPercentile(0.99):F2} process_cpu_ms={cpuMs:F2} process_cpu_cores={cpuMs / Math.Max(1, wallMs):F2} logical_processors={Environment.ProcessorCount} thread_pool_threads={System.Threading.ThreadPool.ThreadCount} thread_pool_pending={System.Threading.ThreadPool.PendingWorkItemCount} previous_report_build_ms={_previousReportTicks * MillisecondsPerTimestamp:F3} previous_report_write_ms={System.Threading.Interlocked.Read(ref _lastReportWriteTicks) * MillisecondsPerTimestamp:F3} reports_dropped={System.Threading.Interlocked.Read(ref _reportsDropped)} reporter_failures={System.Threading.Interlocked.Read(ref _reportFailures)} detail_categories_dropped={_detailDropped}");
-        if (_context != null) msg.Append(' ').Append(_context());
-        EmitPerformanceLine(msg.ToString());
+            var cpuNow = ReadProcessCpu();
+            var cpuValid = cpuNow.HasValue && _processCpuBaseline.HasValue;
+            var cpuMs = cpuValid ? Math.Max(0, (cpuNow!.Value - _processCpuBaseline!.Value).TotalMilliseconds) : 0;
+            var wallMs = (now - _summaryStart) * MillisecondsPerTimestamp;
+            var msg = new StringBuilder(512);
+            msg.Append(CultureInfo.InvariantCulture,
+                $"Performance context: level={DetailLevel} capture_generation={CaptureGeneration} window_end_tick={_performanceEndTick} window_s={wallMs / 1000:F2} ticks={_samples} p50_upper_bucket_ms={TickPercentile(0.5):F2} p95_upper_bucket_ms={TickPercentile(0.95):F2} p99_upper_bucket_ms={TickPercentile(0.99):F2} process_cpu_available={cpuValid} process_cpu_ms={cpuMs:F2} process_cpu_cores={cpuMs / Math.Max(1, wallMs):F2} logical_processors={Environment.ProcessorCount} thread_pool_threads={System.Threading.ThreadPool.ThreadCount} thread_pool_pending={System.Threading.ThreadPool.PendingWorkItemCount} previous_report_build_ms={_previousReportTicks * MillisecondsPerTimestamp:F3} previous_report_write_ms={System.Threading.Interlocked.Read(ref _lastReportWriteTicks) * MillisecondsPerTimestamp:F3} reports_dropped={System.Threading.Interlocked.Read(ref _reportsDropped)} reporter_failures={System.Threading.Interlocked.Read(ref _reportFailures)} detail_categories_dropped={_detailDropped}");
+            if (_context != null) msg.Append(' ').Append(_context());
+            EmitPerformanceLine(msg.ToString());
 
-        _systemRanking.Clear();
-        foreach (var entry in _systems) if (entry.Value.Samples > 0) _systemRanking.Add(entry);
-        _systemRanking.Sort(static (a, b) => b.Value.Total.CompareTo(a.Value.Total));
-        long shown = 0, all = 0;
-        foreach (var entry in _systemRanking) all += entry.Value.Total;
-        for (var i = 0; i < Math.Min(_detailTop, _systemRanking.Count); i++)
-        {
-            var (name, sample) = _systemRanking[i];
-            shown += sample.Total;
-            EmitPerformanceLine(FormattableString.Invariant(
-                $"Performance system: rank={i + 1} name={name} avg_ms_per_tick={sample.Total * MillisecondsPerTimestamp / _samples:F3} max_call_ms={sample.Maximum * MillisecondsPerTimestamp:F3} max_tick_ms={sample.TickMaximum * MillisecondsPerTimestamp:F3} calls={sample.Samples} allocated_main_thread_bytes={sample.Allocated} max_call_allocated_main_thread_bytes={sample.AllocationMaximum} failed_calls={sample.Failures} allocations_measured={DetailLevel >= 2}"));
-        }
-        EmitPerformanceLine(FormattableString.Invariant($"Performance system coverage: systems={_systemRanking.Count} shown={Math.Min(_detailTop, _systemRanking.Count)} other_avg_ms_per_tick={(all - shown) * MillisecondsPerTimestamp / _samples:F3} nested_engine_entries=True"));
-        _detailRanking.Clear();
-        foreach (var entry in _detailTimings) if (entry.Value.Calls > 0) _detailRanking.Add(entry);
-        _detailRanking.Sort(static (a, b) => b.Value.Total.CompareTo(a.Value.Total));
-        for (var i = 0; i < Math.Min(_detailTop, _detailRanking.Count); i++)
-        {
-            var (name, sample) = _detailRanking[i];
-            EmitPerformanceLine(FormattableString.Invariant(
-                $"Performance phase: name={name} avg_ms_per_tick={sample.Total * MillisecondsPerTimestamp / _samples:F3} max_call_ms={sample.Maximum * MillisecondsPerTimestamp:F3} calls={sample.Calls} items_total={sample.Items} items_max={sample.ItemsMaximum} nested=True"));
-        }
-        var counters = 0;
-        foreach (var (name, sample) in _detailRanking)
-        {
-            if (sample.ItemsMaximum == 0 || counters++ >= 16) continue;
-            EmitPerformanceLine(FormattableString.Invariant($"Performance work counter: name={name} calls={sample.Calls} items_total={sample.Items} items_max={sample.ItemsMaximum}"));
-        }
-        EmitPerformanceLine(FormattableString.Invariant($"Performance phase coverage: categories={_detailRanking.Count} shown={Math.Min(_detailTop, _detailRanking.Count)} nesting_additive=False"));
-        LogPvsPerformanceDetails();
-        EmitPerformanceLine(FormattableString.Invariant($"Performance report end: capture_generation={CaptureGeneration} ticks={_samples}"));
-        QueuePerformanceReport();
+            _systemRanking.Clear();
+            foreach (var entry in _systems) if (entry.Value.Samples > 0) _systemRanking.Add(entry);
+            _systemRanking.Sort(static (a, b) => b.Value.Total.CompareTo(a.Value.Total));
+            long shown = 0, all = 0;
+            foreach (var entry in _systemRanking) all += entry.Value.Total;
+            for (var i = 0; i < Math.Min(_detailTop, _systemRanking.Count); i++)
+            {
+                var (name, sample) = _systemRanking[i];
+                shown += sample.Total;
+                EmitPerformanceLine(FormattableString.Invariant(
+                    $"Performance system: rank={i + 1} name={name} avg_ms_per_tick={sample.Total * MillisecondsPerTimestamp / _samples:F3} max_call_ms={sample.Maximum * MillisecondsPerTimestamp:F3} max_tick_ms={sample.TickMaximum * MillisecondsPerTimestamp:F3} calls={sample.Samples} allocated_main_thread_bytes={sample.Allocated} max_call_allocated_main_thread_bytes={sample.AllocationMaximum} failed_calls={sample.Failures} allocations_and_failures_measured={DetailLevel >= 2}"));
+            }
+            EmitPerformanceLine(FormattableString.Invariant($"Performance system coverage: systems={_systemRanking.Count} shown={Math.Min(_detailTop, _systemRanking.Count)} other_avg_ms_per_tick={(all - shown) * MillisecondsPerTimestamp / _samples:F3} nested_engine_entries=True"));
+            _systemRanking.Sort(static (a, b) => b.Value.Maximum.CompareTo(a.Value.Maximum));
+            for (var i = 0; i < Math.Min(5, _systemRanking.Count); i++)
+            {
+                var (name, sample) = _systemRanking[i];
+                EmitPerformanceLine(FormattableString.Invariant($"Performance system peak: rank={i + 1} name={name} max_call_ms={sample.Maximum * MillisecondsPerTimestamp:F3} max_tick_ms={sample.TickMaximum * MillisecondsPerTimestamp:F3} calls={sample.Samples}"));
+            }
+            _detailRanking.Clear();
+            foreach (var entry in _detailTimings) if (entry.Value.Calls > 0) _detailRanking.Add(entry);
+            _detailRanking.Sort(static (a, b) => b.Value.Total.CompareTo(a.Value.Total));
+            for (var i = 0; i < Math.Min(_detailTop, _detailRanking.Count); i++)
+            {
+                var (name, sample) = _detailRanking[i];
+                EmitPerformanceLine(FormattableString.Invariant(
+                    $"Performance phase: name={name} avg_ms_per_tick={sample.Total * MillisecondsPerTimestamp / _samples:F3} max_call_ms={sample.Maximum * MillisecondsPerTimestamp:F3} calls={sample.Calls} items_total={sample.Items} items_max={sample.ItemsMaximum} nested=True"));
+            }
+            var counters = 0;
+            foreach (var (name, sample) in _detailRanking)
+            {
+                if (sample.ItemsMaximum == 0 || counters++ >= 16) continue;
+                EmitPerformanceLine(FormattableString.Invariant($"Performance work counter: name={name} calls={sample.Calls} items_total={sample.Items} items_max={sample.ItemsMaximum}"));
+            }
+            EmitPerformanceLine(FormattableString.Invariant($"Performance phase coverage: categories={_detailRanking.Count} shown={Math.Min(_detailTop, _detailRanking.Count)} nesting_additive=False"));
+            LogPvsPerformanceDetails();
+            EmitPerformanceLine(FormattableString.Invariant($"Performance report end: capture_generation={CaptureGeneration} ticks={_samples}"));
+            QueuePerformanceReport();
         }
         catch (Exception)
         {
@@ -176,7 +188,7 @@ internal sealed partial class ServerTickTiming
         }
         finally
         {
-        _previousReportTicks = Stopwatch.GetTimestamp() - started;
+            _previousReportTicks = Stopwatch.GetTimestamp() - started;
         }
     }
 }

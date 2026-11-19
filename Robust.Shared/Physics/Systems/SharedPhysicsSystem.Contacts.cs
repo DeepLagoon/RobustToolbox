@@ -403,6 +403,8 @@ public abstract partial class SharedPhysicsSystem
 
     private bool CollideContacts(SubstepScope scope)
     {
+        var diagnostic = DiagnosticTiming;
+        var started = diagnostic != null ? System.Diagnostics.Stopwatch.GetTimestamp() : 0;
         // Due to the fact some contacts may be removed (and we need to update this array as we iterate).
         // the length may not match the actual contact count, hence we track the index.
         var contacts = ArrayPool<Contact>.Shared.Rent(ContactCount);
@@ -571,11 +573,16 @@ public abstract partial class SharedPhysicsSystem
 
         var status = ArrayPool<ContactStatus>.Shared.Rent(index);
         var worldPoints = ArrayPool<FixedArray4<Vector2>>.Shared.Rent(index);
+        diagnostic?.Invoke("contacts.filter_and_prune", System.Diagnostics.Stopwatch.GetTimestamp() - started, index);
 
         // Update contacts all at once.
+        started = diagnostic != null ? System.Diagnostics.Stopwatch.GetTimestamp() : 0;
         callbacksRan |= BuildManifolds(contacts, index, status, worldPoints);
+        diagnostic?.Invoke("contacts.manifolds_and_wake", System.Diagnostics.Stopwatch.GetTimestamp() - started, index);
 
         // Single-threaded so content doesn't need to worry about race conditions.
+        started = diagnostic != null ? System.Diagnostics.Stopwatch.GetTimestamp() : 0;
+        var eventContacts = 0;
         for (var i = 0; i < index; i++)
         {
             var contactStatus = status[i];
@@ -591,12 +598,14 @@ public abstract partial class SharedPhysicsSystem
             }
 
             callbacksRan = true;
+            eventContacts++;
             RunContactEvents(contactStatus, contact, worldPoints[i]);
         }
 
         ArrayPool<Contact>.Shared.Return(contacts);
         ArrayPool<ContactStatus>.Shared.Return(status);
         ArrayPool<FixedArray4<Vector2>>.Shared.Return(worldPoints);
+        diagnostic?.Invoke("contacts.content_events", System.Diagnostics.Stopwatch.GetTimestamp() - started, eventContacts);
         return callbacksRan;
     }
 

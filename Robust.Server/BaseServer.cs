@@ -556,7 +556,7 @@ namespace Robust.Server
 
             _tickTiming.Initialize(_log.GetSawmill("srv.tick_timing"), _entityManager.ComponentFactory);
             _tickTiming.SetContextSource(() => FormattableString.Invariant(
-                $"entities_end={_entityManager.EntityCount} deletion_queue_end={((EntityManager)_entityManager).QueuedDeletionCount} physics_registry_end={_entityManager.Count<Robust.Shared.Physics.Components.PhysicsComponent>()} audio_registry_end={_entityManager.Count<Robust.Shared.Audio.Components.AudioComponent>()} timed_despawn_registry_end={_entityManager.Count<Robust.Shared.Spawners.TimedDespawnComponent>()}"));
+                $"entities_end={_entityManager.EntityCount} deletion_queue_end={((EntityManager)_entityManager).QueuedDeletionCount} maps_registry_end={_entityManager.Count<Robust.Shared.Map.Components.MapComponent>()} grids_registry_end={_entityManager.Count<Robust.Shared.Map.Components.MapGridComponent>()} physics_registry_end={_entityManager.Count<Robust.Shared.Physics.Components.PhysicsComponent>()} audio_registry_end={_entityManager.Count<Robust.Shared.Audio.Components.AudioComponent>()} timed_despawn_registry_end={_entityManager.Count<Robust.Shared.Spawners.TimedDespawnComponent>()}"));
             _config.OnValueChanged(ServerTickTiming.LogEnabled, enabled =>
             {
                 _tickTiming.SetEnabled(enabled);
