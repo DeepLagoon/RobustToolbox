@@ -45,7 +45,7 @@ internal sealed partial class ServerTickTiming
 
     private void LogPvsPerformanceDetails()
     {
-        _log.Info(FormattableString.Invariant(
+        EmitPerformanceLine(FormattableString.Invariant(
             $"Performance PVS coverage: handler_calls={_componentCalls} null_states={_nullStates} delta_states={_deltaStates} unclassified_dirty_states={_unclassifiedStates} transform_calls={_transformStates} physics_calls={_physicsStates} timed_handler_samples={_sampledComponentCalls} candidates_in_sampled_packets={_componentCandidates} sampled_packets={_sampledPackets} sampling_stride=8 max_timed_calls_per_tick=64 categories_dropped={_componentCategoriesDropped} fallback_calls_included=True"));
         _componentRanking.Clear();
         foreach (var entry in _componentSamples) _componentRanking.Add(entry);
@@ -55,7 +55,7 @@ internal sealed partial class ServerTickTiming
             var (id, sample) = _componentRanking[i];
             var name = _componentFactory != null && _componentFactory.TryGetRegistration(id, out var registration)
                 ? registration.Name : "netId:" + id;
-            _log.Info(FormattableString.Invariant(
+            EmitPerformanceLine(FormattableString.Invariant(
                 $"Performance PVS component sample: rank={i + 1} net_id={id} name={name} samples={sample.Samples} sampled_total_ms={sample.Elapsed * MillisecondsPerTimestamp:F3} sampled_avg_ms={sample.Elapsed * MillisecondsPerTimestamp / sample.Samples:F4} sampled_max_ms={sample.Maximum * MillisecondsPerTimestamp:F3} worst_entity_uid={sample.WorstEntity} statistical_estimate=False"));
         }
     }

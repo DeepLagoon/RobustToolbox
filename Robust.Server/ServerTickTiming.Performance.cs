@@ -38,6 +38,7 @@ internal sealed partial class ServerTickTiming
     {
         DetailLevel = Math.Clamp(level, 0, 2);
         CaptureGeneration++;
+        InvalidatePerformanceReports();
         _detailSummaryInterval = (long)((float.IsFinite(interval) ? Math.Clamp(interval, 5, 600) : 30) * Stopwatch.Frequency);
         _detailSlowInterval = (long)((float.IsFinite(slowInterval) ? Math.Clamp(slowInterval, 1, 120) : 10) * Stopwatch.Frequency);
         _detailTop = Math.Clamp(top, 1, 100);
@@ -123,16 +124,18 @@ internal sealed partial class ServerTickTiming
 
     private void LogPerformanceDetails(long now)
     {
-        if (DetailLevel == 0 || _samples == 0) return;
+        if (DetailLevel == 0 || _samples == 0 || !BeginPerformanceReport()) return;
         var started = Stopwatch.GetTimestamp();
+        try
+        {
         using var process = Process.GetCurrentProcess();
         var cpuMs = Math.Max(0, (process.TotalProcessorTime - _processCpuBaseline).TotalMilliseconds);
         var wallMs = (now - _summaryStart) * MillisecondsPerTimestamp;
         var msg = new StringBuilder(512);
         msg.Append(CultureInfo.InvariantCulture,
-            $"Performance context: level={DetailLevel} ticks={_samples} p50_upper_bucket_ms={TickPercentile(0.5):F2} p95_upper_bucket_ms={TickPercentile(0.95):F2} p99_upper_bucket_ms={TickPercentile(0.99):F2} process_cpu_ms={cpuMs:F2} process_cpu_cores={cpuMs / Math.Max(1, wallMs):F2} logical_processors={Environment.ProcessorCount} thread_pool_threads={System.Threading.ThreadPool.ThreadCount} thread_pool_pending={System.Threading.ThreadPool.PendingWorkItemCount} previous_report_ms={_previousReportTicks * MillisecondsPerTimestamp:F3} detail_categories_dropped={_detailDropped}");
+            $"Performance context: level={DetailLevel} capture_generation={CaptureGeneration} ticks={_samples} p50_upper_bucket_ms={TickPercentile(0.5):F2} p95_upper_bucket_ms={TickPercentile(0.95):F2} p99_upper_bucket_ms={TickPercentile(0.99):F2} process_cpu_ms={cpuMs:F2} process_cpu_cores={cpuMs / Math.Max(1, wallMs):F2} logical_processors={Environment.ProcessorCount} thread_pool_threads={System.Threading.ThreadPool.ThreadCount} thread_pool_pending={System.Threading.ThreadPool.PendingWorkItemCount} previous_report_build_ms={_previousReportTicks * MillisecondsPerTimestamp:F3} previous_report_write_ms={System.Threading.Interlocked.Read(ref _lastReportWriteTicks) * MillisecondsPerTimestamp:F3} reports_dropped={System.Threading.Interlocked.Read(ref _reportsDropped)} reporter_failures={System.Threading.Interlocked.Read(ref _reportFailures)} detail_categories_dropped={_detailDropped}");
         if (_context != null) msg.Append(' ').Append(_context());
-        _log.Info(msg.ToString());
+        EmitPerformanceLine(msg.ToString());
 
         _systemRanking.Clear();
         foreach (var entry in _systems) if (entry.Value.Samples > 0) _systemRanking.Add(entry);
@@ -143,27 +146,37 @@ internal sealed partial class ServerTickTiming
         {
             var (name, sample) = _systemRanking[i];
             shown += sample.Total;
-            _log.Info(FormattableString.Invariant(
+            EmitPerformanceLine(FormattableString.Invariant(
                 $"Performance system: rank={i + 1} name={name} avg_ms_per_tick={sample.Total * MillisecondsPerTimestamp / _samples:F3} max_call_ms={sample.Maximum * MillisecondsPerTimestamp:F3} max_tick_ms={sample.TickMaximum * MillisecondsPerTimestamp:F3} calls={sample.Samples} allocated_main_thread_bytes={sample.Allocated} max_call_allocated_main_thread_bytes={sample.AllocationMaximum} failed_calls={sample.Failures} allocations_measured={DetailLevel >= 2}"));
         }
-        _log.Info(FormattableString.Invariant($"Performance system coverage: systems={_systemRanking.Count} shown={Math.Min(_detailTop, _systemRanking.Count)} other_avg_ms_per_tick={(all - shown) * MillisecondsPerTimestamp / _samples:F3} nested_engine_entries=True"));
+        EmitPerformanceLine(FormattableString.Invariant($"Performance system coverage: systems={_systemRanking.Count} shown={Math.Min(_detailTop, _systemRanking.Count)} other_avg_ms_per_tick={(all - shown) * MillisecondsPerTimestamp / _samples:F3} nested_engine_entries=True"));
         _detailRanking.Clear();
         foreach (var entry in _detailTimings) if (entry.Value.Calls > 0) _detailRanking.Add(entry);
         _detailRanking.Sort(static (a, b) => b.Value.Total.CompareTo(a.Value.Total));
         for (var i = 0; i < Math.Min(_detailTop, _detailRanking.Count); i++)
         {
             var (name, sample) = _detailRanking[i];
-            _log.Info(FormattableString.Invariant(
+            EmitPerformanceLine(FormattableString.Invariant(
                 $"Performance phase: name={name} avg_ms_per_tick={sample.Total * MillisecondsPerTimestamp / _samples:F3} max_call_ms={sample.Maximum * MillisecondsPerTimestamp:F3} calls={sample.Calls} items_total={sample.Items} items_max={sample.ItemsMaximum} nested=True"));
         }
         var counters = 0;
         foreach (var (name, sample) in _detailRanking)
         {
             if (sample.ItemsMaximum == 0 || counters++ >= 16) continue;
-            _log.Info(FormattableString.Invariant($"Performance work counter: name={name} calls={sample.Calls} items_total={sample.Items} items_max={sample.ItemsMaximum}"));
+            EmitPerformanceLine(FormattableString.Invariant($"Performance work counter: name={name} calls={sample.Calls} items_total={sample.Items} items_max={sample.ItemsMaximum}"));
         }
-        _log.Info(FormattableString.Invariant($"Performance phase coverage: categories={_detailRanking.Count} shown={Math.Min(_detailTop, _detailRanking.Count)} nesting_additive=False"));
+        EmitPerformanceLine(FormattableString.Invariant($"Performance phase coverage: categories={_detailRanking.Count} shown={Math.Min(_detailTop, _detailRanking.Count)} nesting_additive=False"));
         LogPvsPerformanceDetails();
+        EmitPerformanceLine(FormattableString.Invariant($"Performance report end: capture_generation={CaptureGeneration} ticks={_samples}"));
+        QueuePerformanceReport();
+        }
+        catch (Exception)
+        {
+            FailPerformanceReport();
+        }
+        finally
+        {
         _previousReportTicks = Stopwatch.GetTimestamp() - started;
+        }
     }
 }

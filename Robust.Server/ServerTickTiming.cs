@@ -82,6 +82,7 @@ internal sealed partial class ServerTickTiming
     {
         _basicEnabled = enabled;
         CaptureGeneration++;
+        InvalidatePerformanceReports();
         Enabled = enabled || DetailLevel > 0;
         _reset = true;
         if (!Enabled)
