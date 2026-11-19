@@ -132,8 +132,8 @@ public sealed class PhysicsReplicationHotfixTests
         var xform = entities.GetComponent<TransformComponent>(uid);
         Vector2 Center()
         {
-            var (position, rotation) = transforms.GetWorldPositionRotation(xform);
-            return Transform.Mul(new Transform(position, rotation), body.LocalCenter);
+            var (worldPosition, worldRotation) = transforms.GetWorldPositionRotation(xform);
+            return Transform.Mul(new Transform(worldPosition, worldRotation), body.LocalCenter);
         }
         var center = Center();
         var position = xform.LocalPosition;
