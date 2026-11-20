@@ -164,11 +164,16 @@ public sealed partial class EntitySerializer : ISerializationContext,
     public delegate void IsSerializableDelegate(Entity<MetaDataComponent> ent, ref bool serializable);
 
     public EntitySerializer(IDependencyCollection dependency, SerializationOptions options)
+        : this(dependency, options, useIndexedLookup: false)
+    {
+    }
+
+    internal EntitySerializer(IDependencyCollection dependency, SerializationOptions options, bool useIndexedLookup)
     {
         dependency.InjectDependencies(this);
 
         _log = _logMan.GetSawmill("entity_serializer");
-        SerializerProvider = new(_serialization);
+        SerializerProvider = new(_serialization, useIndexedLookup);
         SerializerProvider.RegisterSerializer(this);
 
         _metaName = _factory.GetComponentName<MetaDataComponent>();

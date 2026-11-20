@@ -163,6 +163,9 @@ public sealed partial class SerializationManager
     public sealed class SerializerProvider
     {
         private readonly SerializationManager _ser;
+        private readonly bool _useIndexedLookup;
+        private readonly Dictionary<int, (object? Regular, object? Generic, bool Init)>? _compactNodeSerializers;
+        private readonly Dictionary<int, (object? Regular, object? Generic)[]>? _compactSerializers;
 
         public SerializerProvider(ISerializationManager ser, IEnumerable<Type> typeSerializers) : this(ser)
         {
@@ -172,8 +175,21 @@ public sealed partial class SerializationManager
             }
         }
 
-        public SerializerProvider(ISerializationManager ser)
+        public SerializerProvider(ISerializationManager ser) : this(ser, true)
         {
+        }
+
+        // Short-lived entity contexts register only a few types, whose process-global IDs can
+        // be large. Sparse caches preserve lookup/override semantics without allocating dense
+        // arrays up to those IDs for every snapshot. Keep the public constructor ABI unchanged.
+        internal SerializerProvider(ISerializationManager ser, bool useIndexedLookup)
+        {
+            _useIndexedLookup = useIndexedLookup;
+            if (!useIndexedLookup)
+            {
+                _compactNodeSerializers = new();
+                _compactSerializers = new();
+            }
             // cast it here so every user of this can just directly pass it from a [Dependency] without casting it themselves
             _ser = (SerializationManager) ser;
             foreach (var serializerInterface in SerializerInterfaces)
@@ -211,6 +227,22 @@ public sealed partial class SerializationManager
             serializer = default;
             object? rawSerializer;
             var index = TypeSerializerType<TInterface, TType, TNode>.Index;
+            if (!_useIndexedLookup)
+            {
+                if (_compactNodeSerializers!.TryGetValue(index, out var compact) && compact.Init)
+                {
+                    serializer = (TInterface?) (compact.Regular ?? compact.Generic);
+                    return serializer != null;
+                }
+
+                if (TryGetTypeNodeSerializer(typeof(TInterface).GetGenericTypeDefinition(), typeof(TType), typeof(TNode), out rawSerializer))
+                {
+                    serializer = (TInterface) rawSerializer;
+                    return true;
+                }
+
+                return false;
+            }
             if (index < _typeNodeSerializersArray.Length)
             {
                 ref var serializers = ref _typeNodeSerializersArray[index];
@@ -361,8 +393,15 @@ public sealed partial class SerializationManager
             copyCreator = null;
 
             var information = SerializedType<TType>.Information;
-            if (information.Id < _typeSerializersArray.Length &&
-                _typeSerializersArray[information.Id] is { } serializerArray)
+            (object? Regular, object? Generic)[]? serializerArray = null;
+            if (_useIndexedLookup)
+            {
+                if (information.Id < _typeSerializersArray.Length)
+                    serializerArray = _typeSerializersArray[information.Id];
+            }
+            else
+                _compactSerializers!.TryGetValue(information.Id, out serializerArray);
+            if (serializerArray != null)
             {
                 var copiers = serializerArray[CopierIndex];
                 var copyCreators = serializerArray[CopyCreatorIndex];
@@ -556,6 +595,14 @@ public sealed partial class SerializationManager
         private void RegisterIndexedSerializer(Type elementType, int interfaceIndex, object serializer, bool regular)
         {
             var id = SerializedType.GetId(elementType);
+            if (!_useIndexedLookup)
+            {
+                if (!_compactSerializers!.TryGetValue(id, out var compact))
+                    _compactSerializers.Add(id, compact = new (object? Regular, object? Generic)[SerializerInterfaces.Length]);
+                if (regular) compact[interfaceIndex].Regular = serializer;
+                else compact[interfaceIndex].Generic = serializer;
+                return;
+            }
             if (id >= _typeSerializersArray.Length)
                 Array.Resize(ref _typeSerializersArray, (id + 1) * 2);
 
@@ -577,6 +624,15 @@ public sealed partial class SerializationManager
             lock (_lock)
             {
                 var id = TypeSerializerType.GetId(interfaceIndex, elementType, nodeType);
+                if (!_useIndexedLookup)
+                {
+                    _compactNodeSerializers!.TryGetValue(id, out var compact);
+                    if (regular) compact.Regular = serializer;
+                    else compact.Generic = serializer;
+                    compact.Init = true;
+                    _compactNodeSerializers[id] = compact;
+                    return;
+                }
                 if (id >= _typeNodeSerializersArray.Length)
                     Array.Resize(ref _typeNodeSerializersArray, (id + 1) * 2);
 

@@ -55,6 +55,41 @@ namespace Robust.Server.Physics
         /// </summary>
         private bool _isSplitting;
 
+        // Server-only scopes: unlike MapGridComponent.CanSplit, these must never be
+        // serialized into a map saved while a bulk operation is still in progress.
+        private readonly Dictionary<EntityUid, int> _splitDeferrals = new();
+
+        /// <summary>
+        /// Defers splitting this grid until the last scope is disposed. Tile events,
+        /// collision regeneration and split-node maintenance continue normally.
+        /// Call and dispose on the game thread. Does not change the grid's CanSplit setting.
+        /// </summary>
+        public IDisposable DeferSplitting(EntityUid grid)
+        {
+            _splitDeferrals[grid] = _splitDeferrals.GetValueOrDefault(grid) + 1;
+            return new SplitDeferral(this, grid);
+        }
+
+        private sealed class SplitDeferral(GridFixtureSystem system, EntityUid grid) : IDisposable
+        {
+            private GridFixtureSystem? _system = system;
+
+            public void Dispose()
+            {
+                var owner = _system;
+                _system = null;
+                if (owner == null || !owner._splitDeferrals.TryGetValue(grid, out var count))
+                    return;
+                if (count > 1)
+                {
+                    owner._splitDeferrals[grid] = count - 1;
+                    return;
+                }
+                owner._splitDeferrals.Remove(grid);
+                owner.CheckSplits(grid);
+            }
+        }
+
         internal bool SplitAllowed = true;
 
         private HashSet<EntityUid> _entSet = new();
@@ -67,6 +102,7 @@ namespace Robust.Server.Physics
 
             SubscribeNetworkEvent<RequestGridNodesMessage>(OnDebugRequest);
             SubscribeNetworkEvent<StopGridNodesMessage>(OnDebugStopRequest);
+            SubscribeLocalEvent<MapGridComponent, ComponentRemove>((uid, _, _) => _splitDeferrals.Remove(uid));
 
             Subs.CVar(_cfg, CVars.GridSplitting, SetSplitAllowed, true);
         }
@@ -114,6 +150,7 @@ namespace Robust.Server.Physics
 
         public override void Shutdown()
         {
+            _splitDeferrals.Clear();
             base.Shutdown();
             _subscribedSessions.Clear();
         }
@@ -246,7 +283,7 @@ namespace Robust.Server.Physics
         /// </summary>
         private void CheckSplits(EntityUid uid, HashSet<ChunkSplitNode> dirtyNodes, MapGridComponent? grid = null)
         {
-            if (_isSplitting || !SplitAllowed ||
+            if (_isSplitting || !SplitAllowed || _splitDeferrals.Count > 0 && _splitDeferrals.ContainsKey(uid) ||
                !CanHaveSplitNodes(uid) ||
                !_gridQuery.Resolve(uid, ref grid, false) ||
                !_splitNodeQuery.TryGetComponent(uid, out var splitComp) ||

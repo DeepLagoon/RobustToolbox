@@ -1169,6 +1169,15 @@ public abstract partial class SharedPhysicsSystem
             solvedPositions[index] = Vector2.Zero;
             solvedAngles[index] = 0f;
 
+            var angle = angles[i];
+            var angleDelta = angle - initialAngle;
+            var displacement = positions[i] - initialPosition;
+            // An unchanged solver pose already has the final zero outputs above.
+            // It needs neither a parent inverse nor fixture-move preparation. Keep
+            // velocity application and any earlier ECS callback changes in UpdateBodies.
+            if (displacement == Vector2.Zero && angleDelta == 0f)
+                continue;
+
             var xform = ent.Comp2;
             var parent = xform.ParentUid;
             if (parentPose.Entity != parent || parent == EntityUid.Invalid)
@@ -1181,8 +1190,6 @@ public abstract partial class SharedPhysicsSystem
             }
 
             var (_, parentInvMatrix) = parentPose.Value;
-            var angle = angles[i];
-            var displacement = positions[i] - initialPosition;
             if (angle != initialAngle && body.LocalCenter != Vector2.Zero)
             {
                 displacement -= Physics.Transform.Mul(new Quaternion2D(angle), body.LocalCenter)
@@ -1192,7 +1199,7 @@ public abstract partial class SharedPhysicsSystem
             // Translation cancels when converting a displacement. An unchanged solver
             // pose now produces exact zero, including on distant or rotated grids.
             solvedPositions[index] = Vector2.TransformNormal(displacement, parentInvMatrix);
-            solvedAngles[index] = angle - initialAngle;
+            solvedAngles[index] = angleDelta;
             if (preparedMoves != null)
                 preparedMoves[index] = _lookup.PrepareFixtureMove(ent, solvedPositions[index], solvedAngles[index]);
         }

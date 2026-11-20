@@ -69,10 +69,14 @@ public sealed partial class EntityLookupSystem
     /// </summary>
     private bool IsIntersecting<TShape>(MapId mapId, EntityUid uid, TransformComponent xform, TShape shape, Transform shapeTransform, Box2 worldAABB, LookupFlags flags) where TShape : IPhysShape
     {
+        // The typed low-density path visits components on every map. Reject a
+        // foreign map before walking its possibly deep/rotated transform ancestry.
+        if (xform.MapID != mapId)
+            return false;
+
         var (entPos, entRot) = _transform.GetWorldPositionRotation(xform);
 
-        if (xform.MapID != mapId ||
-            !worldAABB.Contains(entPos) ||
+        if (!worldAABB.Contains(entPos) ||
             ((flags & LookupFlags.Contained) == 0x0 &&
              _container.IsEntityOrParentInContainer(uid, _metaQuery.GetComponent(uid), xform)))
         {

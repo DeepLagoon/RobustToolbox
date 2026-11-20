@@ -501,6 +501,11 @@ public sealed partial class EntityDeserializer :
 
     private void AllocateEntities()
     {
+        foreach (var _ in AllocateEntitySteps(false)) { }
+    }
+
+    private IEnumerable<object?> AllocateEntitySteps(bool loadingPause)
+    {
         _stopwatch.Restart();
 
         foreach (var (protoId, ents) in Prototypes)
@@ -512,6 +517,7 @@ public sealed partial class EntityDeserializer :
             foreach (var ent in ents)
             {
                 var entity = EntMan.AllocEntity(proto);
+                if (loadingPause) _metaQuery.GetComponent(entity).PauseTime = Timing.CurTime;
                 Result.Entities.Add(entity);
                 UidMap.Add(ent.YamlId, entity);
                 Entities.Add(entity, ent);
@@ -527,6 +533,7 @@ public sealed partial class EntityDeserializer :
 
                 if (Options.StoreYamlUids)
                     EntMan.AddComponent<YamlUidComponent>(entity).Uid = ent.YamlId;
+                yield return null;
             }
         }
 
@@ -569,6 +576,11 @@ public sealed partial class EntityDeserializer :
 
     private void LoadEntities()
     {
+        foreach (var _ in LoadEntitySteps()) { }
+    }
+
+    private IEnumerable<object?> LoadEntitySteps()
+    {
         _stopwatch.Restart();
         foreach (var (entity, data) in Entities)
         {
@@ -586,6 +598,7 @@ public sealed partial class EntityDeserializer :
                 _log.Error($"Encountered error while loading entity. Yaml uid: {data.YamlId}. Loaded loaded entity: {EntMan.ToPrettyString(entity)}. Error:\n{e}.");
             }
 #endif
+            yield return null;
         }
 
         CurrentReadingEntity = null;
@@ -966,10 +979,18 @@ public sealed partial class EntityDeserializer :
 
     private void StartEntitiesInternal()
     {
+        foreach (var _ in StartupEntitySteps(false)) { }
+    }
+
+    private IEnumerable<object?> StartupEntitySteps(bool loadingPause)
+    {
         _stopwatch.Restart();
         foreach (var uid in SortedEntities)
         {
-            StartupEntity(uid, _metaQuery.GetComponent(uid));
+            var metadata = _metaQuery.GetComponent(uid);
+            if (loadingPause) metadata.PauseTime = Timing.CurTime;
+            StartupEntity(uid, metadata);
+            yield return null;
         }
         _log.Debug($"Started up {Result.Entities.Count} entities in {_stopwatch.Elapsed}");
     }

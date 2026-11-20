@@ -58,6 +58,19 @@ public abstract partial class SharedMapSystem
 
     internal void RecursiveMapInit(EntityUid entity)
     {
+        foreach (var _ in MapInitSteps(entity, false)) { }
+    }
+
+    /// <summary>Map-init a private paused staging map one complete entity callback at a time.</summary>
+    public IEnumerable<EntityUid> InitializeMapSteps(EntityUid map)
+    {
+        if (!_mapQuery.TryComp(map, out var component) || component.MapInitialized || !IsPaused(map))
+            throw new ArgumentException("Expected a paused pre-mapinit staging map.");
+        foreach (var uid in MapInitSteps(map, true)) yield return uid;
+    }
+
+    private IEnumerable<EntityUid> MapInitSteps(EntityUid entity, bool normalizePause)
+    {
         var toInitialize = new List<EntityUid> {entity};
         for (var i = 0; i < toInitialize.Count; i++)
         {
@@ -70,7 +83,15 @@ public abstract partial class SharedMapSystem
                 continue;
 
             toInitialize.AddRange(Transform(uid)._children);
+            // Startup and map-init can happen on different ticks in the opt-in loader.
+            // Bring already initialized paused clocks forward before map-init sets fresh ones.
+            if (normalizePause && meta.EntityPaused)
+            {
+                _meta.SetEntityPaused(uid, false, meta);
+                _meta.SetEntityPaused(uid, true, meta);
+            }
             EntityManager.RunMapInit(uid, meta);
+            yield return uid;
         }
     }
 }

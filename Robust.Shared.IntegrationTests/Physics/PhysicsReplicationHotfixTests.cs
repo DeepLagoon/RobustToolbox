@@ -237,4 +237,87 @@ public sealed class PhysicsReplicationHotfixTests
             if (changeDuringMove) Assert.That(delta.SleepingAllowed, Is.False);
         });
     }
+
+    [TestCase(false)]
+    [TestCase(true)]
+    public void StationarySolverBodiesFollowParentWithoutExtraLocalMovement(bool prepareMoves)
+    {
+        var sim = RobustServerSimulation.NewSimulation().InitializeInstance();
+        var entities = sim.Resolve<IEntityManager>();
+        var cfg = sim.Resolve<IConfigurationManager>();
+        cfg.SetCVar(CVars.NetTickrate, 30);
+        cfg.SetCVar(CVars.TargetMinimumTickrate, 30);
+        cfg.SetCVar(CVars.PrepareFixtureMoves, prepareMoves);
+        var maps = entities.System<SharedMapSystem>();
+        var transform = entities.System<SharedTransformSystem>();
+        var physics = entities.System<SharedPhysicsSystem>();
+        var map = sim.CreateMap();
+        var grid = maps.CreateGridEntity(map.MapId);
+        maps.SetTile(grid, Vector2i.Zero, new Tile(1));
+        // Keep the resting body's origin over a real tile. Otherwise the first
+        // physics move may legitimately traverse it off this one-tile grid.
+        maps.SetTile(grid, new Vector2i(44, 26), new Tile(1));
+        transform.SetLocalPositionRotation(grid, new Vector2(2000, -22000), new Angle(2.413));
+        (EntityUid Uid, PhysicsComponent Body, TransformComponent Transform) Spawn(EntityCoordinates coords, bool offset)
+        {
+            var uid = entities.SpawnEntity(null, coords);
+            var body = entities.AddComponent<PhysicsComponent>(uid);
+            entities.System<FixtureSystem>().CreateFixture(uid, "body",
+                new Fixture(new PhysShapeCircle(.1f, offset ? new Vector2(.25f, -.125f) : Vector2.Zero), 1, 1, true), body: body);
+            physics.SetBodyType(uid, BodyType.Dynamic, body: body);
+            physics.SetSleepingAllowed(uid, body, false);
+            physics.SetLinearDamping(uid, body, 0);
+            physics.SetAngularDamping(uid, body, 0);
+            return (uid, body, entities.GetComponent<TransformComponent>(uid));
+        }
+        var resting = Spawn(new EntityCoordinates(grid, new Vector2(44.48584f, 26.044922f)), true);
+        var free = Spawn(new EntityCoordinates(map.Uid, new Vector2(-100, -100)), false);
+        var moving = Spawn(new EntityCoordinates(map.Uid, new Vector2(-200, -200)), true);
+        physics.SetFixedRotation(moving.Uid, false, body: moving.Body);
+        physics.SetLinearVelocity(moving.Uid, Vector2.UnitX, body: moving.Body);
+        physics.SetAngularVelocity(moving.Uid, 2, body: moving.Body);
+        physics.Update(1f / 30);
+        Assert.That(resting.Transform.ParentUid, Is.EqualTo(grid.Owner));
+        Assert.That(resting.Transform.GridUid, Is.EqualTo(grid.Owner));
+        var local = resting.Transform.LocalPosition;
+        var rotation = resting.Transform.LocalRotation;
+        var freePosition = free.Transform.LocalPosition;
+        var movingPosition = moving.Transform.LocalPosition;
+        var movingRotation = moving.Transform.LocalRotation;
+        var originalWorld = transform.GetWorldPosition(resting.Transform);
+        var extraLocalMoves = 0;
+        void OnMove(ref MoveEvent ev)
+        {
+            if (ev.Sender == resting.Uid || ev.Sender == free.Uid) extraLocalMoves++;
+        }
+        transform.OnGlobalMoveEvent += OnMove;
+        try
+        {
+            for (var i = 0; i < 20; i++)
+            {
+                transform.SetLocalPositionRotation(grid, new Vector2(2000 + i, -22000 - i), new Angle(2.413 + .02 * i));
+                var beforePhysics = extraLocalMoves;
+                physics.Update(1f / 30);
+                Assert.That(resting.Transform.ParentUid, Is.EqualTo(grid.Owner), "The fixture must remain on its tiled parent grid.");
+                Assert.That(resting.Transform.GridUid, Is.EqualTo(grid.Owner));
+                Assert.That(extraLocalMoves, Is.EqualTo(beforePhysics), "The solver must not emit extra local moves for stationary bodies.");
+                Assert.That(resting.Transform.LocalPosition, Is.EqualTo(local));
+                Assert.That(resting.Transform.LocalRotation, Is.EqualTo(rotation));
+                Assert.That(free.Transform.LocalPosition, Is.EqualTo(freePosition));
+            }
+        }
+        finally { transform.OnGlobalMoveEvent -= OnMove; }
+        Assert.Multiple(() =>
+        {
+            Assert.That(transform.GetWorldPosition(resting.Transform), Is.Not.EqualTo(originalWorld), "The parent still carries the stationary child.");
+            Assert.That(resting.Body.LinearVelocity, Is.EqualTo(Vector2.Zero));
+            Assert.That(free.Body.LinearVelocity, Is.EqualTo(Vector2.Zero));
+            Assert.That(moving.Body.LocalCenter, Is.Not.EqualTo(Vector2.Zero));
+            Assert.That(moving.Transform.LocalPosition, Is.Not.EqualTo(movingPosition), "Nonzero displacement must still be simulated.");
+            Assert.That(moving.Transform.LocalRotation, Is.Not.EqualTo(movingRotation), "Nonzero COM rotation must still be simulated.");
+            Assert.That(moving.Body.LinearVelocity, Is.EqualTo(Vector2.UnitX));
+            Assert.That(moving.Body.AngularVelocity, Is.EqualTo(2));
+        });
+    }
+
 }

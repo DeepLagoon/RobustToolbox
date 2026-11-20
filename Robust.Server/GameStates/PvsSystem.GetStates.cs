@@ -119,11 +119,12 @@ internal sealed partial class PvsSystem
                 var elapsed = Stopwatch.GetTimestamp() - started;
                 ref var measured = ref diagnostics!.Timing;
                 measured.ComponentSamples++;
-                var stats = measured.Components!.GetValueOrDefault(netId);
+                var components = measured.Components!;
+                var stats = components.GetValueOrDefault(netId);
                 stats.Elapsed += elapsed;
                 stats.Samples++;
                 if (elapsed > stats.Maximum) { stats.Maximum = elapsed; stats.WorstEntity = uid; }
-                measured.Components[netId] = stats;
+                components[netId] = stats;
             }
         }
 
